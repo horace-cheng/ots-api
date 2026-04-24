@@ -9,4 +9,5 @@ venv/
 dist/
 build/
 .DS_Store
+.idea/
 /cloud-sql-proxy

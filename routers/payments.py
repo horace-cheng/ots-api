@@ -7,6 +7,7 @@ routers/payments.py
 """
 
 from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
@@ -45,11 +46,11 @@ async def payment_webhook(
         payload = gateway.parse_webhook(raw_body)
     except ValueError as e:
         logger.warning(f"Webhook verification failed: {e}")
-        return "0|Error"
+        return PlainTextResponse("0|Error")
 
     if payload.status != PaymentStatus.PAID:
         logger.info(f"Webhook: order {payload.order_id} not paid (status={payload.status})")
-        return "1|OK"
+        return PlainTextResponse("1|OK")
 
     # 更新付款記錄
     await db.execute(text("""
@@ -72,7 +73,7 @@ async def payment_webhook(
     # 自動開立 B2C 電子發票
     await _try_issue_invoice(db, gateway, payload.order_id, payload.amount_ntd)
 
-    return "1|OK"
+    return PlainTextResponse("1|OK")
 
 
 async def _try_issue_invoice(db, gateway, order_id: str, amount_ntd: int):

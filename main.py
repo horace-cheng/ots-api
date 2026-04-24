@@ -14,11 +14,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ── Lifespan：啟動與關閉時執行 ───────────────────────────────────────────────
+# ── Lifespan ───────────────────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 啟動
     logger.info(f"Starting OTS API Backend [env={settings.env}]")
+    logger.info(f"Payment gateway: {settings.payment_gateway}")
 
     init_firebase()
 
@@ -30,23 +30,20 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # 關閉
     logger.info("OTS API Backend shutting down")
 
 
-# ── App ───────────────────────────────────────────────────────────────────────
+# ── App ───────────────────────────────────────────────────────────────────────────────
 app = FastAPI(
-    title="OTS Translation API",
-    version="0.1.0",
-    description="Original Tale Studio — Translation Service Backend",
-    lifespan=lifespan,
-    # production 環境關閉 docs
-    docs_url="/docs" if settings.env != "production" else None,
-    redoc_url="/redoc" if settings.env != "production" else None,
+    title       = "OTS Translation API",
+    version     = "0.1.0",
+    description = "Original Tale Studio — Translation Service Backend",
+    lifespan    = lifespan,
+    docs_url    = "/docs"  if settings.env != "production" else None,
+    redoc_url   = "/redoc" if settings.env != "production" else None,
 )
 
-# ── CORS ──────────────────────────────────────────────────────────────────────
-# 上線後改成實際域名
+# ── CORS ───────────────────────────────────────────────────────────────────────────────
 ALLOWED_ORIGINS = {
     "dev":        ["http://localhost:3000", "http://localhost:5173"],
     "staging":    ["https://staging.ots.tw"],
@@ -55,32 +52,30 @@ ALLOWED_ORIGINS = {
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins     = ALLOWED_ORIGINS,
+    allow_credentials = True,
+    allow_methods     = ["*"],
+    allow_headers     = ["*"],
 )
 
+# ── Routers ───────────────────────────────────────────────────────────────────────────────
+from routers import orders, files, payments, admin
 
-# ── Routers（逐步掛載）───────────────────────────────────────────────────────
-# from routers import orders, files, payments, admin
-# app.include_router(orders.router)
-# app.include_router(files.router)
-# app.include_router(payments.router)
-# app.include_router(admin.router)
+app.include_router(orders.router)
+app.include_router(files.router)
+app.include_router(payments.router)
+app.include_router(admin.router)
 
-
-# ── Health check ──────────────────────────────────────────────────────────────
+# ── Health / Root ──────────────────────────────────────────────────────────────────────────────
 @app.get("/health", tags=["system"])
 async def health():
-    """Cloud Run 健康檢查端點"""
     db_ok = await check_db_connection()
     return {
-        "status": "ok" if db_ok else "degraded",
-        "env": settings.env,
-        "db": "connected" if db_ok else "error",
+        "status":          "ok" if db_ok else "degraded",
+        "env":             settings.env,
+        "db":              "connected" if db_ok else "error",
+        "payment_gateway": settings.payment_gateway,
     }
-
 
 @app.get("/", tags=["system"])
 async def root():

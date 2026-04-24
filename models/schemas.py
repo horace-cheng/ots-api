@@ -1,0 +1,202 @@
+"""
+models/schemas.py
+
+所有 API 的 Pydantic request / response schema。
+"""
+
+from pydantic import BaseModel, Field, field_validator, model_validator
+from typing import Optional, List
+from datetime import datetime
+from enum import Enum
+
+
+# ── 共用 Enum ─────────────────────────────────────────────────────────────────
+class TrackType(str, Enum):
+    FAST     = "fast"
+    LITERARY = "literary"
+
+class LangCode(str, Enum):
+    TAI_LO     = "tai-lo"
+    HAKKA      = "hakka"
+    INDIGENOUS = "indigenous"
+    ZH_TW      = "zh-tw"
+    EN         = "en"
+    JA         = "ja"
+    KO         = "ko"
+
+class OrderStatus(str, Enum):
+    PENDING_PAYMENT = "pending_payment"
+    PAID            = "paid"
+    PROCESSING      = "processing"
+    QA_REVIEW       = "qa_review"
+    DELIVERED       = "delivered"
+    CANCELLED       = "cancelled"
+
+class FlagLevel(str, Enum):
+    MUST_FIX = "must_fix"
+    REVIEW   = "review"
+    PASS     = "pass"
+
+class ClientType(str, Enum):
+    B2C = "b2c"
+    B2B = "b2b"
+
+
+# ── User ──────────────────────────────────────────────────────────────────────
+class UserProfileUpdate(BaseModel):
+    client_type:     ClientType
+    company_name:    Optional[str] = None
+    tax_id:          Optional[str] = None
+    invoice_carrier: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_b2b_fields(self):
+        if self.client_type == ClientType.B2B and not self.tax_id:
+            raise ValueError("tax_id is required for B2B clients")
+        return self
+
+class UserProfileResponse(BaseModel):
+    id:              str
+    uid_firebase:    str
+    client_type:     str
+    company_name:    Optional[str]
+    tax_id:          Optional[str]
+    invoice_carrier: Optional[str]
+    created_at:      datetime
+
+
+# ── Order ─────────────────────────────────────────────────────────────────────
+class OrderCreate(BaseModel):
+    track_type:  TrackType
+    source_lang: LangCode
+    target_lang: LangCode
+    word_count:  int   = Field(..., gt=0, description="原文字數")
+    price_ntd:   int   = Field(..., gt=0, description="訂單金額（新台幣）")
+    notes:       Optional[str] = Field(None, max_length=500)
+
+    @field_validator("target_lang")
+    @classmethod
+    def validate_lang_pair(cls, v, info):
+        src = info.data.get("source_lang")
+        if src and src == v:
+            raise ValueError("source_lang and target_lang must be different")
+        return v
+
+class OrderResponse(BaseModel):
+    order_id:    str
+    status:      str
+    payment_url: str
+    track_type:  str
+    word_count:  int
+    price_ntd:   int
+    created_at:  datetime
+
+class OrderDetail(BaseModel):
+    id:              str
+    track_type:      str
+    status:          str
+    source_lang:     str
+    target_lang:     str
+    word_count:      int
+    price_ntd:       int
+    notes:           Optional[str]
+    created_at:      datetime
+    deadline_at:     Optional[datetime]
+    delivered_at:    Optional[datetime]
+    payment_status:  Optional[str]
+    invoice_no:      Optional[str]
+    gcs_output_path: Optional[str]
+
+class OrderListResponse(BaseModel):
+    orders: List[OrderDetail]
+    total:  int
+
+
+# ── File ──────────────────────────────────────────────────────────────────────
+class UploadUrlRequest(BaseModel):
+    order_id:     str
+    filename:     str = Field(..., description="原始檔案名稱（含副檔名）")
+    content_type: str = Field("text/plain", description="MIME type")
+
+class UploadUrlResponse(BaseModel):
+    signed_url: str
+    gcs_path:   str
+    expires_in: int = 1800  # 秒
+
+class DownloadUrlResponse(BaseModel):
+    signed_url: str
+    expires_in: int = 3600
+
+
+# ── Pipeline Job ──────────────────────────────────────────────────────────────
+class QAResultLayer(BaseModel):
+    pass_: bool = Field(..., alias="pass")
+    flags: int  = 0
+    score: Optional[float] = None
+
+    class Config:
+        populate_by_name = True
+
+class QAResult(BaseModel):
+    layer1_structure:   Optional[QAResultLayer] = None
+    layer2_semantic:    Optional[QAResultLayer] = None
+    layer3_terminology: Optional[QAResultLayer] = None
+    layer4_llm_judge:   Optional[QAResultLayer] = None
+
+class PipelineJobResponse(BaseModel):
+    id:              str
+    job_type:        str
+    status:          str
+    qa_result:       Optional[dict]
+    retry_count:     int
+    error_message:   Optional[str]
+    started_at:      Optional[datetime]
+    finished_at:     Optional[datetime]
+
+
+# ── QA Flag ───────────────────────────────────────────────────────────────────
+class QAFlagResponse(BaseModel):
+    id:                 str
+    job_id:             str
+    order_id:           str
+    paragraph_index:    int
+    flag_level:         str
+    flag_type:          str
+    source_segment:     Optional[str]
+    translated_segment: Optional[str]
+    reviewer_note:      Optional[str]
+    resolved:           bool
+    flagged_at:         datetime
+
+class QAFlagResolve(BaseModel):
+    reviewer_note: str = Field(..., min_length=1, max_length=1000)
+
+
+# ── Admin: 付款確認（手動匯款用）────────────────────────────────────────────
+class PaymentConfirm(BaseModel):
+    confirmed_amount_ntd: int = Field(..., gt=0, description="確認的匯款金額")
+    note:                 Optional[str] = None
+
+
+# ── Admin: Literary Track 指派 ────────────────────────────────────────────────
+class AssignmentUpdate(BaseModel):
+    editor_id:       Optional[str] = None
+    proofreader_id:  Optional[str] = None
+
+class AssignmentResponse(BaseModel):
+    id:                     str
+    order_id:               str
+    editor_id:              Optional[str]
+    proofreader_id:         Optional[str]
+    status:                 str
+    assigned_at:            datetime
+    editor_submitted_at:    Optional[datetime]
+    proofread_submitted_at: Optional[datetime]
+
+
+# ── 共用回傳 ──────────────────────────────────────────────────────────────────
+class MessageResponse(BaseModel):
+    message: str
+
+class ErrorResponse(BaseModel):
+    detail: str
