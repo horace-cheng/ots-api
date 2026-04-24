@@ -1,4 +1,11 @@
 steps:
+  # Step 0: Run tests
+  - name: "python:3.12-slim"
+    entrypoint: bash
+    args:
+      - -c
+      - pip install -r requirements.txt -r requirements-dev.txt && pytest
+
   # Step 1: Build container image
   - name: "gcr.io/cloud-builders/docker"
     args:
