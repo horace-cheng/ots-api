@@ -16,6 +16,14 @@ FastAPI backend for the Original Tale Studio (OTS) translation service platform,
 **Prerequisites**: Python 3.12+, `gcloud` CLI, Cloud SQL Auth Proxy
 
 ```bash
+# Create and activate a virtual environment (required — avoids system package conflicts)
+python3.12 -m venv .venv
+source .venv/bin/activate
+
+# If python3.12-venv is missing on Ubuntu/Debian, install it first:
+# sudo add-apt-repository ppa:deadsnakes/ppa
+# sudo apt install python3.12-venv
+
 pip install -r requirements.txt
 cp .env.example .env      # fill in credentials
 
