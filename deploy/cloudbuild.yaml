@@ -31,7 +31,7 @@ steps:
     args:
       - run
       - deploy
-      - ots-api-backend
+      - ots-api-backend-$_ENV
       - --image=asia-east1-docker.pkg.dev/$PROJECT_ID/ots/api-backend:$SHORT_SHA
       - --region=asia-east1
       - --service-account=ots-api-backend-$_ENV@$PROJECT_ID.iam.gserviceaccount.com
