@@ -55,6 +55,27 @@ API docs available at `http://localhost:8080/docs` (dev environment only).
 
 On Cloud Run, secrets are injected via Secret Manager (`--set-secrets`).
 
+## Testing
+
+```bash
+# Install test dependencies (only needed once)
+pip install -r requirements-dev.txt
+
+# Run the full test suite
+pytest
+
+# Run a single test file
+pytest tests/test_router_orders.py
+
+# Run a single test by name
+pytest tests/test_router_orders.py::TestCreateOrder::test_returns_201_with_payment_url
+
+# Verbose output with print statements
+pytest -v -s
+```
+
+Tests use `pytest-asyncio` (auto mode) and mock all external dependencies — no database, Firebase, or GCP connection required.
+
 ## Deployment
 
 Deployed via Cloud Build (`deploy/cloudbuild.yaml`) to Cloud Run in `asia-east1`. To deploy to a specific environment, pass the `_ENV` substitution:
