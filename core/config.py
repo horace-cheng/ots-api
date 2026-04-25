@@ -24,6 +24,13 @@ class Settings(BaseSettings):
 
     # 金流廠商
     payment_gateway: str     = os.environ.get("PAYMENT_GATEWAY", "manual")
+
+    # Service Account email（Signed URL 簽名用）
+    # Cloud Run 環境下自動從 metadata server 取得，也可明確指定
+    service_account_email: str = os.environ.get(
+        "SERVICE_ACCOUNT_EMAIL",
+        f"ots-api-backend-dev@ots-translation.iam.gserviceaccount.com"
+    )    
     web_portal_url: str      = os.environ.get("WEB_PORTAL_URL", "http://localhost:3000")
 
     class Config:
