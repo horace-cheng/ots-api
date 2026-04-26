@@ -4,10 +4,14 @@ models/schemas.py
 所有 API 的 Pydantic request / response schema。
 """
 
-from pydantic import BaseModel, Field, field_validator, model_validator
-from typing import Optional, List
+from pydantic import BaseModel, Field, field_validator, model_validator, BeforeValidator
+from typing import Optional, List, Annotated
 from datetime import datetime
 from enum import Enum
+import uuid as _uuid
+
+# asyncpg returns UUID columns as uuid.UUID objects; coerce to str for JSON responses
+UUIDStr = Annotated[str, BeforeValidator(lambda v: str(v) if isinstance(v, _uuid.UUID) else v)]
 
 
 # ── 共用 Enum ─────────────────────────────────────────────────────────────────
@@ -56,7 +60,7 @@ class UserProfileUpdate(BaseModel):
         return self
 
 class UserProfileResponse(BaseModel):
-    id:              str
+    id:              UUIDStr
     uid_firebase:    str
     client_type:     str
     company_name:    Optional[str]
@@ -91,7 +95,7 @@ class OrderResponse(BaseModel):
     created_at:  datetime
 
 class OrderDetail(BaseModel):
-    id:              str
+    id:              UUIDStr
     track_type:      str
     status:          str
     source_lang:     str
@@ -143,7 +147,7 @@ class QAResult(BaseModel):
     layer4_llm_judge:   Optional[QAResultLayer] = None
 
 class PipelineJobResponse(BaseModel):
-    id:              str
+    id:              UUIDStr
     job_type:        str
     status:          str
     qa_result:       Optional[dict]
@@ -155,9 +159,9 @@ class PipelineJobResponse(BaseModel):
 
 # ── QA Flag ───────────────────────────────────────────────────────────────────
 class QAFlagResponse(BaseModel):
-    id:                 str
-    job_id:             str
-    order_id:           str
+    id:                 UUIDStr
+    job_id:             UUIDStr
+    order_id:           UUIDStr
     paragraph_index:    int
     flag_level:         str
     flag_type:          str
@@ -183,10 +187,10 @@ class AssignmentUpdate(BaseModel):
     proofreader_id:  Optional[str] = None
 
 class AssignmentResponse(BaseModel):
-    id:                     str
-    order_id:               str
-    editor_id:              Optional[str]
-    proofreader_id:         Optional[str]
+    id:                     UUIDStr
+    order_id:               UUIDStr
+    editor_id:              Optional[UUIDStr]
+    proofreader_id:         Optional[UUIDStr]
     status:                 str
     assigned_at:            datetime
     editor_submitted_at:    Optional[datetime]
