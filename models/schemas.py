@@ -71,7 +71,6 @@ class OrderCreate(BaseModel):
     source_lang: LangCode
     target_lang: LangCode
     word_count:  int   = Field(..., gt=0, description="原文字數")
-    price_ntd:   int   = Field(..., gt=0, description="訂單金額（新台幣）")
     notes:       Optional[str] = Field(None, max_length=500)
 
     @field_validator("target_lang")

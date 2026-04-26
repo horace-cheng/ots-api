@@ -3,6 +3,7 @@ routers/auth.py
 
 Firebase ID Token 驗證中介層。
 所有需要登入的端點都 Depends(get_current_user)。
+Admin 端點 Depends(get_admin_user)，查 admin_users 表判斷。
 """
 
 from fastapi import Depends, HTTPException, Header
@@ -68,15 +69,28 @@ async def get_current_user(
 
 async def get_admin_user(
     current_user: dict = Depends(get_current_user),
+    db: AsyncSession   = Depends(get_db),
 ) -> dict:
     """
-    Admin 端點用。
-    目前以 client_type 判斷，之後可改為 roles 表。
-    TODO: 建立 admin_users 白名單表
+    Admin 端點用。查 admin_users 表，確認 uid_firebase 存在且 active = true。
+    role 欄位回傳供端點做進一步的 superadmin 判斷。
     """
-    # 暫時以環境變數 ADMIN_UIDS 做白名單
-    import os
-    admin_uids = os.environ.get("ADMIN_UIDS", "").split(",")
-    if current_user["uid"] not in admin_uids:
+    result = await db.execute(text("""
+        SELECT id, role, active
+        FROM admin_users
+        WHERE uid_firebase = :uid
+    """), {"uid": current_user["uid"]})
+
+    admin_row = result.fetchone()
+
+    if not admin_row:
         raise HTTPException(status_code=403, detail="Admin access required")
-    return current_user
+
+    if not admin_row.active:
+        raise HTTPException(status_code=403, detail="Admin account is disabled")
+
+    return {
+        **current_user,
+        "admin_id": str(admin_row.id),
+        "role":     admin_row.role,
+    }

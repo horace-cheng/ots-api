@@ -45,6 +45,7 @@ steps:
       - --set-secrets=ECPAY_HASH_IV=ots-ecpay-hash-iv-$_ENV:latest
       - --set-env-vars=PROJECT_ID=$PROJECT_ID
       - --set-env-vars=SERVICE_ACCOUNT_EMAIL=ots-api-backend-$_ENV@$PROJECT_ID.iam.gserviceaccount.com      
+      - --set-env-vars=INTERNAL_ALLOWED_SA=ots-workflow-$_ENV@$PROJECT_ID.iam.gserviceaccount.com
       - --set-env-vars=ENV=$_ENV
       - --set-env-vars=GCS_UPLOADS_BUCKET=$PROJECT_ID-uploads-$_ENV
       - --set-env-vars=GCS_OUTPUTS_BUCKET=$PROJECT_ID-outputs-$_ENV

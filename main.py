@@ -59,12 +59,13 @@ app.add_middleware(
 )
 
 # ── Routers ───────────────────────────────────────────────────────────────────────────────
-from routers import orders, files, payments, admin
+from routers import orders, files, payments, admin, internal
 
 app.include_router(orders.router)
 app.include_router(files.router)
 app.include_router(payments.router)
 app.include_router(admin.router)
+app.include_router(internal.router)
 
 # ── Health / Root ──────────────────────────────────────────────────────────────────────────────
 @app.get("/health", tags=["system"])
