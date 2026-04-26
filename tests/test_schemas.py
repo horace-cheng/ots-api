@@ -32,7 +32,6 @@ class TestOrderCreate:
             source_lang=LangCode.ZH_TW,
             target_lang=LangCode.EN,
             word_count=1000,
-            price_ntd=2000,
         )
         return OrderCreate(**{**defaults, **overrides})
 
@@ -51,10 +50,6 @@ class TestOrderCreate:
     def test_word_count_negative_raises(self):
         with pytest.raises(ValidationError):
             self._valid(word_count=-1)
-
-    def test_price_ntd_zero_raises(self):
-        with pytest.raises(ValidationError):
-            self._valid(price_ntd=0)
 
     def test_notes_max_length(self):
         with pytest.raises(ValidationError):

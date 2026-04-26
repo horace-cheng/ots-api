@@ -1,4 +1,3 @@
-import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import FastAPI, Depends
@@ -85,31 +84,41 @@ class TestGetCurrentUser:
 
 
 class TestGetAdminUser:
-    def _setup_user(self, mock_db, uid="admin-uid-001"):
+    def _user_row(self):
         row = MagicMock()
         row.id = "admin-db-id"
         row.client_type = "b2c"
-        mock_db.execute.return_value.fetchone.return_value = row
-        return {**DECODED_TOKEN, "uid": uid}
+        return row
 
-    def test_uid_in_allowlist_passes(self, client, mock_db):
-        token = self._setup_user(mock_db, uid="admin-uid-001")
-        with patch("routers.auth.verify_firebase_token", return_value=token), \
-             patch.dict(os.environ, {"ADMIN_UIDS": "admin-uid-001,admin-uid-002"}):
+    def _admin_row(self, active=True):
+        row = MagicMock()
+        row.id = "admin-table-id"
+        row.role = "admin"
+        row.active = active
+        return row
+
+    def test_valid_admin_passes(self, client, mock_db):
+        mock_db.execute.return_value.fetchone.side_effect = [
+            self._user_row(), self._admin_row(active=True)
+        ]
+        with patch("routers.auth.verify_firebase_token", return_value=DECODED_TOKEN):
             resp = client.get("/admin-only", headers={"Authorization": "Bearer admin-token"})
         assert resp.status_code == 200
 
-    def test_uid_not_in_allowlist_403(self, client, mock_db):
-        token = self._setup_user(mock_db, uid="regular-uid")
-        with patch("routers.auth.verify_firebase_token", return_value=token), \
-             patch.dict(os.environ, {"ADMIN_UIDS": "admin-uid-001"}):
+    def test_uid_not_in_admin_users_403(self, client, mock_db):
+        mock_db.execute.return_value.fetchone.side_effect = [
+            self._user_row(), None
+        ]
+        with patch("routers.auth.verify_firebase_token", return_value=DECODED_TOKEN):
             resp = client.get("/admin-only", headers={"Authorization": "Bearer user-token"})
         assert resp.status_code == 403
         assert "Admin access required" in resp.json()["detail"]
 
-    def test_empty_admin_uids_403(self, client, mock_db):
-        token = self._setup_user(mock_db)
-        with patch("routers.auth.verify_firebase_token", return_value=token), \
-             patch.dict(os.environ, {"ADMIN_UIDS": ""}):
+    def test_disabled_admin_403(self, client, mock_db):
+        mock_db.execute.return_value.fetchone.side_effect = [
+            self._user_row(), self._admin_row(active=False)
+        ]
+        with patch("routers.auth.verify_firebase_token", return_value=DECODED_TOKEN):
             resp = client.get("/admin-only", headers={"Authorization": "Bearer token"})
         assert resp.status_code == 403
+        assert "disabled" in resp.json()["detail"]
