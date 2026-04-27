@@ -343,6 +343,30 @@ async def admin_list_orders(
     return OrderListResponse(orders=orders, total=total)
 
 
+# ── Admin: 取得單一訂單詳情 ───────────────────────────────────────────────────
+@router.get("/orders/{order_id}", response_model=OrderDetail)
+async def admin_get_order(
+    order_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    result = await db.execute(text("""
+        SELECT
+            o.id, o.track_type, o.status, o.source_lang, o.target_lang,
+            o.word_count, o.price_ntd, o.notes,
+            o.created_at, o.deadline_at, o.delivered_at,
+            o.gcs_output_path,
+            p.payment_status, p.invoice_no
+        FROM orders o
+        LEFT JOIN payments p ON p.order_id = o.id
+        WHERE o.id = :order_id
+    """), {"order_id": order_id})
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return OrderDetail(**dict(row._mapping))
+
+
 # ── Admin: 標記訂單已交付 ─────────────────────────────────────────────────────
 @router.post("/orders/{order_id}/deliver", response_model=MessageResponse)
 async def mark_delivered(
