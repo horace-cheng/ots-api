@@ -112,6 +112,46 @@ class TestResolveQAFlag:
         assert resp.json()["message"] == "QA flag resolved"
 
 
+class TestAdminGetOrder:
+    def _order_row(self):
+        from datetime import datetime, timezone
+        row = MagicMock()
+        row._mapping = {
+            "id":              "order-001",
+            "track_type":      "literary",
+            "status":          "processing",
+            "source_lang":     "zh-tw",
+            "target_lang":     "en",
+            "word_count":      5000,
+            "price_ntd":       30000,
+            "notes":           None,
+            "created_at":      datetime(2026, 4, 27, tzinfo=timezone.utc),
+            "deadline_at":     None,
+            "delivered_at":    None,
+            "gcs_output_path": None,
+            "payment_status":  "paid",
+            "invoice_no":      None,
+        }
+        return row
+
+    def test_order_not_found_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+
+        resp = admin_client.get("/admin/orders/nonexistent")
+        assert resp.status_code == 404
+
+    def test_success_returns_order_detail(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._order_row()
+
+        resp = admin_client.get("/admin/orders/order-001")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == "order-001"
+        assert data["track_type"] == "literary"
+        assert data["status"] == "processing"
+        assert data["price_ntd"] == 30000
+
+
 class TestUpdateAssignment:
     def test_no_fields_returns_400(self, admin_client):
         resp = admin_client.patch("/admin/assignments/ORDER-001", json={})

@@ -133,3 +133,64 @@ class TestGetOrder:
         mock_db.execute.return_value.fetchone.return_value = None
         resp = orders_client.get("/orders/nonexistent")
         assert resp.status_code == 404
+
+    def test_success_returns_order_detail(self, orders_client, mock_db):
+        from datetime import datetime, timezone
+        row = MagicMock()
+        row._mapping = {
+            "id":              "order-001",
+            "track_type":      "fast",
+            "status":          "paid",
+            "source_lang":     "zh-tw",
+            "target_lang":     "en",
+            "word_count":      1000,
+            "price_ntd":       2000,
+            "notes":           None,
+            "created_at":      datetime(2026, 4, 27, tzinfo=timezone.utc),
+            "deadline_at":     None,
+            "delivered_at":    None,
+            "payment_status":  "paid",
+            "invoice_no":      None,
+            "gcs_output_path": None,
+        }
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        resp = orders_client.get("/orders/order-001")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == "order-001"
+        assert data["status"] == "paid"
+        assert data["track_type"] == "fast"
+
+
+class TestListOrders:
+    def test_empty_list_returns_zero_total(self, orders_client, mock_db):
+        mock_db.execute.return_value.fetchall.return_value = []
+        mock_db.execute.return_value.scalar.return_value = 0
+
+        resp = orders_client.get("/orders")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["orders"] == []
+        assert data["total"] == 0
+
+    def test_status_filter_accepted(self, orders_client, mock_db):
+        mock_db.execute.return_value.fetchall.return_value = []
+        mock_db.execute.return_value.scalar.return_value = 0
+
+        resp = orders_client.get("/orders", params={"status": "paid"})
+        assert resp.status_code == 200
+
+    def test_track_type_filter_accepted(self, orders_client, mock_db):
+        mock_db.execute.return_value.fetchall.return_value = []
+        mock_db.execute.return_value.scalar.return_value = 0
+
+        resp = orders_client.get("/orders", params={"track_type": "literary"})
+        assert resp.status_code == 200
+
+    def test_pagination_params_accepted(self, orders_client, mock_db):
+        mock_db.execute.return_value.fetchall.return_value = []
+        mock_db.execute.return_value.scalar.return_value = 0
+
+        resp = orders_client.get("/orders", params={"limit": 5, "offset": 10})
+        assert resp.status_code == 200
