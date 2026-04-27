@@ -76,6 +76,10 @@ def generate_download_signed_url(
     """產生 GCS 下載用 Signed URL（GET method，有效 1 小時）"""
     client = get_storage_client()
     bucket = client.bucket(settings.gcs_outputs_bucket)
+    # Strip gs://<bucket>/ prefix if the stored path is a full GCS URI
+    prefix = f"gs://{settings.gcs_outputs_bucket}/"
+    if gcs_path.startswith(prefix):
+        gcs_path = gcs_path[len(prefix):]
     blob   = bucket.blob(gcs_path)
 
     signed_url = blob.generate_signed_url(
