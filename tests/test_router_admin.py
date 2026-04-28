@@ -113,7 +113,7 @@ class TestResolveQAFlag:
 
 
 class TestAdminGetOrder:
-    def _order_row(self):
+    def _order_row(self, qa_result=None, gcs_output_path=None):
         from datetime import datetime, timezone
         row = MagicMock()
         row._mapping = {
@@ -128,9 +128,10 @@ class TestAdminGetOrder:
             "created_at":      datetime(2026, 4, 27, tzinfo=timezone.utc),
             "deadline_at":     None,
             "delivered_at":    None,
-            "gcs_output_path": None,
+            "gcs_output_path": gcs_output_path,
             "payment_status":  "paid",
             "invoice_no":      None,
+            "qa_result":       qa_result,
         }
         return row
 
@@ -150,6 +151,52 @@ class TestAdminGetOrder:
         assert data["track_type"] == "literary"
         assert data["status"] == "processing"
         assert data["price_ntd"] == 30000
+
+    def test_includes_qa_result(self, admin_client, mock_db):
+        qa = {"layer1_structure": {"pass": True, "flags": 0}}
+        mock_db.execute.return_value.fetchone.return_value = self._order_row(qa_result=qa)
+
+        resp = admin_client.get("/admin/orders/order-001")
+        assert resp.status_code == 200
+        assert resp.json()["qa_result"] == qa
+
+    def test_qa_result_none_when_no_pipeline_job(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._order_row(qa_result=None)
+
+        resp = admin_client.get("/admin/orders/order-001")
+        assert resp.status_code == 200
+        assert resp.json()["qa_result"] is None
+
+
+class TestAdminGetDownloadUrl:
+    def test_order_not_found_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+
+        resp = admin_client.get("/admin/orders/nonexistent/download-url")
+        assert resp.status_code == 404
+
+    def test_missing_output_path_returns_404(self, admin_client, mock_db):
+        row = MagicMock()
+        row.gcs_output_path = None
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        resp = admin_client.get("/admin/orders/order-001/download-url")
+        assert resp.status_code == 404
+        assert "Output file not found" in resp.json()["detail"]
+
+    def test_success_returns_signed_url(self, admin_client, mock_db):
+        row = MagicMock()
+        row.gcs_output_path = "orders/order-001/output.docx"
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        with patch("routers.admin.generate_download_signed_url",
+                   return_value="https://storage.googleapis.com/signed"):
+            resp = admin_client.get("/admin/orders/order-001/download-url")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["signed_url"] == "https://storage.googleapis.com/signed"
+        assert data["expires_in"] == 3600
 
 
 class TestUpdateAssignment:
