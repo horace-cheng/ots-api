@@ -60,18 +60,19 @@ async def create_order(
     price    = _calc_price(body.track_type, body.word_count, body.target_lang)
     deadline = _calc_deadline(body.track_type)
     now      = datetime.now(timezone.utc)
+    title    = (body.title or "").strip() or None  # NULL means: generate from content on upload confirm
 
     # 建立訂單
     await db.execute(text("""
         INSERT INTO orders (
             id, user_id, track_type, status,
             source_lang, target_lang, word_count, price_ntd,
-            notes, created_at, deadline_at
+            title, notes, created_at, deadline_at
         )
         SELECT
             :id, u.id, :track_type, 'pending_payment',
             :source_lang, :target_lang, :word_count, :price_ntd,
-            :notes, :now, :deadline
+            :title, :notes, :now, :deadline
         FROM users u WHERE u.uid_firebase = :uid
     """), {
         "id":          order_id,
@@ -80,6 +81,7 @@ async def create_order(
         "target_lang": body.target_lang,
         "word_count":  body.word_count,
         "price_ntd":   price,
+        "title":       title,
         "notes":       body.notes,
         "now":         now,
         "deadline":    deadline,
@@ -165,7 +167,7 @@ async def list_orders(
     result = await db.execute(text(f"""
         SELECT
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
-            o.word_count, o.price_ntd, o.notes,
+            o.word_count, o.price_ntd, o.title, o.notes,
             o.created_at, o.deadline_at, o.delivered_at,
             o.gcs_output_path,
             p.payment_status, p.invoice_no
@@ -201,7 +203,7 @@ async def get_order(
     result = await db.execute(text("""
         SELECT
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
-            o.word_count, o.price_ntd, o.notes,
+            o.word_count, o.price_ntd, o.title, o.notes,
             o.created_at, o.deadline_at, o.delivered_at,
             o.gcs_output_path,
             p.payment_status, p.invoice_no

@@ -59,6 +59,18 @@ class TestOrderCreate:
         order = self._valid(notes=None)
         assert order.notes is None
 
+    def test_title_optional(self):
+        order = self._valid()
+        assert order.title is None
+
+    def test_title_accepted_when_provided(self):
+        order = self._valid(title="My Translation Project")
+        assert order.title == "My Translation Project"
+
+    def test_title_max_length(self):
+        with pytest.raises(ValidationError):
+            self._valid(title="x" * 101)
+
 
 class TestQAFlagResolve:
     def test_empty_note_raises(self):
