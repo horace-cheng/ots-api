@@ -21,6 +21,7 @@ from models.schemas import (
     PaymentConfirm, MessageResponse,
     OrderDetail, AdminOrderDetail, OrderListResponse,
     DownloadUrlResponse,
+    UserListItem, UserUpdateRequest,
 )
 from services.payment import (
     get_payment_gateway, InvoiceRequest, InvoiceType, InvoiceError
@@ -422,3 +423,71 @@ async def mark_delivered(
 
     logger.info(f"Order delivered: {order_id}")
     return MessageResponse(message=f"Order {order_id} marked as delivered")
+
+
+# ── Admin: 帳號管理 ───────────────────────────────────────────────────────────
+@router.get("/users", response_model=list[UserListItem])
+async def list_users(
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """列出所有使用者帳號及其 admin 狀態"""
+    result = await db.execute(text("""
+        SELECT
+            u.id, u.uid_firebase, u.email, u.client_type,
+            u.disabled, u.created_at,
+            (au.id IS NOT NULL AND au.active = true) AS is_admin,
+            au.role AS admin_role
+        FROM users u
+        LEFT JOIN admin_users au ON au.uid_firebase = u.uid_firebase AND au.active = true
+        ORDER BY u.created_at DESC
+    """))
+    rows = result.fetchall()
+    return [UserListItem(**dict(r._mapping)) for r in rows]
+
+
+@router.patch("/users/{user_id}", response_model=MessageResponse)
+async def update_user(
+    user_id: str,
+    body:  UserUpdateRequest,
+    admin: dict             = Depends(get_admin_user),
+    db:   AsyncSession      = Depends(get_db),
+):
+    """停用/啟用帳號；指派或撤銷 admin 權限"""
+    result = await db.execute(
+        text("SELECT id, uid_firebase, email FROM users WHERE id = :id"),
+        {"id": user_id}
+    )
+    user_row = result.fetchone()
+    if not user_row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # 防止 admin 停用自己
+    if body.disabled is True and str(user_row.uid_firebase) == admin["uid"]:
+        raise HTTPException(status_code=400, detail="Cannot disable your own account")
+
+    if body.disabled is not None:
+        await db.execute(
+            text("UPDATE users SET disabled = :disabled WHERE id = :id"),
+            {"disabled": body.disabled, "id": user_id}
+        )
+
+    if body.is_admin is True:
+        await db.execute(text("""
+            INSERT INTO admin_users (uid_firebase, email, role, active)
+            VALUES (:uid, :email, 'admin', true)
+            ON CONFLICT (uid_firebase) DO UPDATE SET active = true
+        """), {"uid": user_row.uid_firebase, "email": user_row.email or ""})
+
+    elif body.is_admin is False:
+        # 防止 superadmin 自降
+        if str(user_row.uid_firebase) == admin["uid"]:
+            raise HTTPException(status_code=400, detail="Cannot remove your own admin role")
+        await db.execute(
+            text("UPDATE admin_users SET active = false WHERE uid_firebase = :uid"),
+            {"uid": user_row.uid_firebase}
+        )
+
+    await db.commit()
+    logger.info(f"User {user_id} updated by admin {admin['uid']}: {body.model_dump(exclude_none=True)}")
+    return MessageResponse(message="User updated")

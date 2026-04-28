@@ -200,6 +200,22 @@ class AssignmentResponse(BaseModel):
     proofread_submitted_at: Optional[datetime]
 
 
+# ── Admin: 帳號管理 ───────────────────────────────────────────────────────────
+class UserListItem(BaseModel):
+    id:           UUIDStr
+    uid_firebase: str
+    email:        Optional[str]
+    client_type:  str
+    disabled:     bool
+    created_at:   datetime
+    is_admin:     bool
+    admin_role:   Optional[str]
+
+class UserUpdateRequest(BaseModel):
+    disabled: Optional[bool] = None
+    is_admin: Optional[bool] = None
+
+
 # ── 共用回傳 ──────────────────────────────────────────────────────────────────
 class MessageResponse(BaseModel):
     message: str
