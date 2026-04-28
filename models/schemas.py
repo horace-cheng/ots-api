@@ -110,6 +110,9 @@ class OrderDetail(BaseModel):
     invoice_no:      Optional[str]
     gcs_output_path: Optional[str]
 
+class AdminOrderDetail(OrderDetail):
+    qa_result: Optional[dict] = None
+
 class OrderListResponse(BaseModel):
     orders: List[OrderDetail]
     total:  int

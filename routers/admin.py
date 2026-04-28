@@ -13,12 +13,14 @@ from datetime import datetime, timezone
 import logging
 
 from core.database import get_db
+from core.storage import generate_download_signed_url
 from routers.auth import get_admin_user
 from models.schemas import (
     QAFlagResponse, QAFlagResolve,
     AssignmentUpdate, AssignmentResponse,
     PaymentConfirm, MessageResponse,
-    OrderDetail, OrderListResponse,
+    OrderDetail, AdminOrderDetail, OrderListResponse,
+    DownloadUrlResponse,
 )
 from services.payment import (
     get_payment_gateway, InvoiceRequest, InvoiceType, InvoiceError
@@ -344,7 +346,7 @@ async def admin_list_orders(
 
 
 # ── Admin: 取得單一訂單詳情 ───────────────────────────────────────────────────
-@router.get("/orders/{order_id}", response_model=OrderDetail)
+@router.get("/orders/{order_id}", response_model=AdminOrderDetail)
 async def admin_get_order(
     order_id: str,
     admin: dict        = Depends(get_admin_user),
@@ -356,15 +358,36 @@ async def admin_get_order(
             o.word_count, o.price_ntd, o.notes,
             o.created_at, o.deadline_at, o.delivered_at,
             o.gcs_output_path,
-            p.payment_status, p.invoice_no
+            p.payment_status, p.invoice_no,
+            pj.qa_result
         FROM orders o
         LEFT JOIN payments p ON p.order_id = o.id
+        LEFT JOIN pipeline_jobs pj ON pj.order_id = o.id AND pj.job_type = 'qa_auto'
         WHERE o.id = :order_id
     """), {"order_id": order_id})
     row = result.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Order not found")
-    return OrderDetail(**dict(row._mapping))
+    return AdminOrderDetail(**dict(row._mapping))
+
+
+# ── Admin: 取得譯文下載 URL ───────────────────────────────────────────────────
+@router.get("/orders/{order_id}/download-url", response_model=DownloadUrlResponse)
+async def admin_get_download_url(
+    order_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    result = await db.execute(text("""
+        SELECT o.gcs_output_path FROM orders o WHERE o.id = :order_id
+    """), {"order_id": order_id})
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if not row.gcs_output_path:
+        raise HTTPException(status_code=404, detail="Output file not found")
+    signed_url = generate_download_signed_url(row.gcs_output_path)
+    return DownloadUrlResponse(signed_url=signed_url, expires_in=3600)
 
 
 # ── Admin: 標記訂單已交付 ─────────────────────────────────────────────────────
