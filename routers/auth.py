@@ -38,26 +38,36 @@ async def get_current_user(
     uid   = decoded["uid"]
     email = decoded.get("email", "")
 
-    # 首次登入：自動建立 users 記錄
+    # 首次登入：自動建立 users 記錄；後續登入：同步 email 快取
     result = await db.execute(
-        text("SELECT id, client_type FROM users WHERE uid_firebase = :uid"),
+        text("SELECT id, client_type, disabled FROM users WHERE uid_firebase = :uid"),
         {"uid": uid}
     )
     user_row = result.fetchone()
 
     if not user_row:
         await db.execute(text("""
-            INSERT INTO users (uid_firebase, client_type)
-            VALUES (:uid, 'b2c')
+            INSERT INTO users (uid_firebase, email, client_type)
+            VALUES (:uid, :email, 'b2c')
             ON CONFLICT (uid_firebase) DO NOTHING
-        """), {"uid": uid})
+        """), {"uid": uid, "email": email})
         await db.commit()
 
         result = await db.execute(
-            text("SELECT id, client_type FROM users WHERE uid_firebase = :uid"),
+            text("SELECT id, client_type, disabled FROM users WHERE uid_firebase = :uid"),
             {"uid": uid}
         )
         user_row = result.fetchone()
+    elif email and not user_row.disabled:
+        # 同步 email（Firebase 為源頭，DB 為快取）
+        await db.execute(
+            text("UPDATE users SET email = :email WHERE uid_firebase = :uid"),
+            {"email": email, "uid": uid}
+        )
+        await db.commit()
+
+    if user_row.disabled:
+        raise HTTPException(status_code=403, detail="Account is disabled")
 
     return {
         "uid":         uid,

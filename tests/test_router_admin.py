@@ -199,6 +199,94 @@ class TestAdminGetDownloadUrl:
         assert data["expires_in"] == 3600
 
 
+class TestListUsers:
+    def test_returns_empty_list(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchall.return_value = []
+
+        resp = admin_client.get("/admin/users")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_returns_user_list(self, admin_client, mock_db):
+        from datetime import datetime, timezone
+        row = MagicMock()
+        row._mapping = {
+            "id":           "user-001",
+            "uid_firebase": "firebase-uid-001",
+            "email":        "user@ots.tw",
+            "client_type":  "b2c",
+            "disabled":     False,
+            "created_at":   datetime(2026, 4, 27, tzinfo=timezone.utc),
+            "is_admin":     False,
+            "admin_role":   None,
+        }
+        mock_db.execute.return_value.fetchall.return_value = [row]
+
+        resp = admin_client.get("/admin/users")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["email"] == "user@ots.tw"
+        assert data[0]["is_admin"] is False
+
+
+class TestUpdateUser:
+    def _user_row(self, uid="other-uid-001"):
+        row = MagicMock()
+        row.uid_firebase = uid
+        row.email = "user@ots.tw"
+        return row
+
+    def test_user_not_found_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+
+        resp = admin_client.patch("/admin/users/nonexistent", json={"disabled": True})
+        assert resp.status_code == 404
+
+    def test_cannot_disable_own_account(self, admin_client, mock_db):
+        from tests.factories import MOCK_ADMIN_USER
+        # Return a row whose uid_firebase matches the acting admin's uid
+        mock_db.execute.return_value.fetchone.return_value = self._user_row(
+            uid=MOCK_ADMIN_USER["uid"]
+        )
+
+        resp = admin_client.patch("/admin/users/admin-db-id", json={"disabled": True})
+        assert resp.status_code == 400
+        assert "Cannot disable your own account" in resp.json()["detail"]
+
+    def test_cannot_remove_own_admin_role(self, admin_client, mock_db):
+        from tests.factories import MOCK_ADMIN_USER
+        mock_db.execute.return_value.fetchone.return_value = self._user_row(
+            uid=MOCK_ADMIN_USER["uid"]
+        )
+
+        resp = admin_client.patch("/admin/users/admin-db-id", json={"is_admin": False})
+        assert resp.status_code == 400
+        assert "Cannot remove your own admin role" in resp.json()["detail"]
+
+    def test_disable_user_success(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._user_row()
+
+        resp = admin_client.patch("/admin/users/user-001", json={"disabled": True})
+        assert resp.status_code == 200
+        assert resp.json()["message"] == "User updated"
+        mock_db.commit.assert_awaited()
+
+    def test_grant_admin_success(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._user_row()
+
+        resp = admin_client.patch("/admin/users/user-001", json={"is_admin": True})
+        assert resp.status_code == 200
+        mock_db.commit.assert_awaited()
+
+    def test_revoke_admin_success(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._user_row()
+
+        resp = admin_client.patch("/admin/users/user-001", json={"is_admin": False})
+        assert resp.status_code == 200
+        mock_db.commit.assert_awaited()
+
+
 class TestUpdateAssignment:
     def test_no_fields_returns_400(self, admin_client):
         resp = admin_client.patch("/admin/assignments/ORDER-001", json={})

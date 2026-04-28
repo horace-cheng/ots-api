@@ -34,11 +34,15 @@ def client(mock_db):
 
 
 class TestGetCurrentUser:
+    def _user_row(self, disabled=False):
+        row = MagicMock()
+        row.id = "db-id-001"
+        row.client_type = "b2c"
+        row.disabled = disabled
+        return row
+
     def test_valid_token_returns_user(self, client, mock_db):
-        user_row = MagicMock()
-        user_row.id = "db-id-001"
-        user_row.client_type = "b2c"
-        mock_db.execute.return_value.fetchone.return_value = user_row
+        mock_db.execute.return_value.fetchone.return_value = self._user_row()
 
         with patch("routers.auth.verify_firebase_token", return_value=DECODED_TOKEN):
             resp = client.get("/me", headers={"Authorization": "Bearer valid-token"})
@@ -53,6 +57,7 @@ class TestGetCurrentUser:
         new_row = MagicMock()
         new_row.id = "new-db-id"
         new_row.client_type = "b2c"
+        new_row.disabled = False
         # First SELECT returns None, second SELECT (after INSERT) returns the new row
         mock_db.execute.return_value.fetchone.side_effect = [None, new_row]
 
@@ -61,6 +66,25 @@ class TestGetCurrentUser:
 
         assert resp.status_code == 200
         assert mock_db.execute.call_count >= 2
+        mock_db.commit.assert_called()
+
+    def test_disabled_account_returns_403(self, client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._user_row(disabled=True)
+
+        with patch("routers.auth.verify_firebase_token", return_value=DECODED_TOKEN):
+            resp = client.get("/me", headers={"Authorization": "Bearer valid-token"})
+
+        assert resp.status_code == 403
+        assert "disabled" in resp.json()["detail"]
+
+    def test_email_synced_on_subsequent_login(self, client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._user_row()
+
+        with patch("routers.auth.verify_firebase_token", return_value=DECODED_TOKEN):
+            resp = client.get("/me", headers={"Authorization": "Bearer valid-token"})
+
+        assert resp.status_code == 200
+        # email UPDATE + commit should have been called
         mock_db.commit.assert_called()
 
     def test_missing_auth_header_422(self, client):
@@ -88,6 +112,7 @@ class TestGetAdminUser:
         row = MagicMock()
         row.id = "admin-db-id"
         row.client_type = "b2c"
+        row.disabled = False
         return row
 
     def _admin_row(self, active=True):
