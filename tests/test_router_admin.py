@@ -124,6 +124,7 @@ class TestAdminGetOrder:
             "target_lang":     "en",
             "word_count":      5000,
             "price_ntd":       30000,
+            "title":           None,
             "notes":           None,
             "created_at":      datetime(2026, 4, 27, tzinfo=timezone.utc),
             "deadline_at":     None,

@@ -71,6 +71,25 @@ class TestCreateOrder:
         assert resp.status_code == 201
         assert resp.json()["price_ntd"] == 30000  # 5000 * 6
 
+    def test_title_stored_when_provided(self, orders_client):
+        resp = orders_client.post("/orders", json={
+            "track_type": "fast",
+            "source_lang": "zh-tw",
+            "target_lang": "en",
+            "word_count": 1000,
+            "title": "My Translation Project",
+        })
+        assert resp.status_code == 201
+
+    def test_title_optional_when_not_provided(self, orders_client):
+        resp = orders_client.post("/orders", json={
+            "track_type": "fast",
+            "source_lang": "zh-tw",
+            "target_lang": "en",
+            "word_count": 1000,
+        })
+        assert resp.status_code == 201
+
     def test_same_lang_returns_422(self, orders_client):
         resp = orders_client.post("/orders", json={
             "track_type": "fast",
@@ -145,6 +164,7 @@ class TestGetOrder:
             "target_lang":     "en",
             "word_count":      1000,
             "price_ntd":       2000,
+            "title":           None,
             "notes":           None,
             "created_at":      datetime(2026, 4, 27, tzinfo=timezone.utc),
             "deadline_at":     None,
