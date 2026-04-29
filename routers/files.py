@@ -51,7 +51,7 @@ def _extract_title(gcs_path: str) -> str | None:
         words = text.split()
         if not words:
             return None
-        return " ".join(words[:10])[:100]
+        return " ".join(words[:10])[:50]
     except Exception as e:
         logger.warning(f"Title extraction failed for {gcs_path}: {e}")
         return None
