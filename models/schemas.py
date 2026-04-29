@@ -75,7 +75,7 @@ class OrderCreate(BaseModel):
     source_lang: LangCode
     target_lang: LangCode
     word_count:  int   = Field(..., gt=0, description="原文字數")
-    title:       Optional[str] = Field(None, max_length=100, description="訂單標題（選填，不填則自動產生）")
+    title:       Optional[str] = Field(None, max_length=50, description="訂單標題（選填，不填則自動產生）")
     notes:       Optional[str] = Field(None, max_length=500)
 
     @field_validator("target_lang")
