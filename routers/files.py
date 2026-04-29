@@ -8,11 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import logging
+import re
 
 from core.database import get_db
 from core.storage import generate_upload_signed_url, generate_download_signed_url, get_storage_client
 from core.config import settings
-import re
 from routers.auth import get_current_user
 from models.schemas import (
     UploadUrlRequest, UploadUrlResponse, DownloadUrlResponse
@@ -63,6 +63,41 @@ ALLOWED_CONTENT_TYPES = {
     "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
+
+_LANG_ZH = {
+    "tai-lo":     "台語",
+    "hakka":      "客語",
+    "indigenous": "原住民族語",
+    "zh-tw":      "繁體中文",
+    "en":         "English",
+    "ja":         "日本語",
+    "ko":         "한국어",
+}
+
+
+def _extract_title(gcs_path: str) -> str | None:
+    """Read the first 600 bytes of an uploaded file and return the opening words as a title."""
+    try:
+        filename = gcs_path.rsplit("/", 1)[-1].lower()
+        ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
+        if ext not in ("txt", "html", "htm"):
+            return None
+
+        client = get_storage_client()
+        blob   = client.bucket(settings.gcs_uploads_bucket).blob(gcs_path)
+        data   = blob.download_as_bytes(start=0, end=600)
+        text_  = data.decode("utf-8", errors="ignore")
+
+        if ext in ("html", "htm"):
+            text_ = re.sub(r"<[^>]+>", " ", text_)
+
+        words = text_.split()
+        if not words:
+            return None
+        return " ".join(words[:10])[:50]
+    except Exception as e:
+        logger.warning(f"Title extraction failed for {gcs_path}: {e}")
+        return None
 
 
 # ── POST /files/upload-url ────────────────────────────────────────────────────
@@ -124,6 +159,7 @@ async def confirm_upload(
 ):
     """
     前端完成 GCS 上傳後，通知後端記錄 gcs_upload_path。
+    若訂單標題尚未設定，從檔案內容擷取前幾個字作為標題。
     """
     result = await db.execute(text("""
         SELECT o.id, o.title, o.track_type, o.source_lang, o.target_lang
