@@ -45,14 +45,15 @@ app = FastAPI(
 
 # ── CORS ───────────────────────────────────────────────────────────────────────────────
 ALLOWED_ORIGINS = {
-    "dev":        ["http://localhost:3000", "http://localhost:5173"],
-    "staging":    ["https://staging.ots.tw"],
-    "production": ["https://ots.tw", "https://www.ots.tw"],
-}.get(settings.env, ["http://localhost:3000"])
+    "dev":        ["http://localhost:3000", "http://localhost:5173", settings.web_portal_url],
+    "staging":    ["https://staging.ots.tw", settings.web_portal_url],
+    "production": ["https://ots.tw", "https://www.ots.tw", settings.web_portal_url],
+}.get(settings.env, ["http://localhost:3000", settings.web_portal_url])
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins     = ALLOWED_ORIGINS,
+    allow_origin_regex = r"https://ots-frontend-.*\.run\.app",
     allow_credentials = True,
     allow_methods     = ["*"],
     allow_headers     = ["*"],
