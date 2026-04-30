@@ -218,6 +218,27 @@ class UserUpdateRequest(BaseModel):
     is_admin: Optional[bool] = None
 
 
+# ── Admin: QA Review Editor ──────────────────────────────────────────────────
+class QASegment(BaseModel):
+    index:          int
+    source:         str
+    translated:     str
+    raw:            Optional[str] = None
+    comments:       Optional[str] = None
+    flags:          List[QAFlagResponse] = []
+
+class QASegmentListResponse(BaseModel):
+    segments: List[QASegment]
+
+class QASegmentUpdate(BaseModel):
+    index:      int
+    translated: str
+    comments:   Optional[str] = None
+
+class QASegmentsBatchUpdate(BaseModel):
+    segments: List[QASegmentUpdate]
+
+
 # ── 共用回傳 ──────────────────────────────────────────────────────────────────
 class MessageResponse(BaseModel):
     message: str

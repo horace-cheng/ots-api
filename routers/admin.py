@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import logging
 
 from core.database import get_db
+from core import storage
 from core.storage import generate_download_signed_url
 from routers.auth import get_admin_user
 from models.schemas import (
@@ -22,6 +23,7 @@ from models.schemas import (
     OrderDetail, AdminOrderDetail, OrderListResponse,
     DownloadUrlResponse,
     UserListItem, UserUpdateRequest,
+    QASegment, QASegmentListResponse, QASegmentsBatchUpdate,
 )
 from services.payment import (
     get_payment_gateway, InvoiceRequest, InvoiceType, InvoiceError
@@ -491,3 +493,132 @@ async def update_user(
     await db.commit()
     logger.info(f"User {user_id} updated by admin {admin['uid']}: {body.model_dump(exclude_none=True)}")
     return MessageResponse(message="User updated")
+
+
+# ── Admin: QA Review Editor ──────────────────────────────────────────────────
+@router.get("/orders/{order_id}/segments", response_model=QASegmentListResponse)
+async def get_order_segments(
+    order_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """
+    獲取訂單的所有段落（原文、譯文、Raw 譯文、QA Flags）
+    供 QA Review Editor 使用。
+    """
+    # 1. 從 GCS 讀取資料
+    segments_raw = storage.read_temp_json(order_id, "segments.json")
+    translations = storage.read_temp_json(order_id, "translations.json")
+    trans_raw    = storage.read_temp_json(order_id, "translations_raw.json")
+
+    if not segments_raw or not translations:
+        raise HTTPException(status_code=404, detail="Segments or translations not found")
+
+    # 2. 從 DB 讀取 QA Flags
+    result = await db.execute(text("""
+        SELECT qf.id, qf.job_id, pj.order_id,
+               qf.paragraph_index, qf.flag_level, qf.flag_type,
+               qf.source_segment, qf.translated_segment,
+               qf.reviewer_note, qf.resolved, qf.flagged_at
+        FROM qa_flags qf
+        JOIN pipeline_jobs pj ON pj.id = qf.job_id
+        WHERE pj.order_id = :order_id
+    """), {"order_id": order_id})
+    flags_rows = result.fetchall()
+    
+    # 建立 index 到 flags 的 mapping
+    flags_map: dict[int, list] = {}
+    for r in flags_rows:
+        idx = r.paragraph_index
+        if idx not in flags_map:
+            flags_map[idx] = []
+        flags_map[idx].append(QAFlagResponse(**dict(r._mapping)))
+
+    # 建立 index 到 raw translation 的 mapping
+    raw_map = {t["index"]: t["translated"] for t in trans_raw} if isinstance(trans_raw, list) else {}
+
+    # 3. 合併資料
+    res_segments = []
+    # 譯文列表可能是 list of dict: [{"index": 0, "translated": "...", "comments": "..."}, ...]
+    trans_map = {t["index"]: t for t in translations} if isinstance(translations, list) else {}
+
+    for s in segments_raw:
+        idx = s["index"]
+        t = trans_map.get(idx, {})
+        
+        res_segments.append(QASegment(
+            index      = idx,
+            source     = s["text"],
+            translated = t.get("translated", ""),
+            raw        = raw_map.get(idx),
+            comments   = t.get("comments"),
+            flags      = flags_map.get(idx, []),
+        ))
+
+    return QASegmentListResponse(segments=res_segments)
+
+
+@router.patch("/orders/{order_id}/segments", response_model=MessageResponse)
+async def update_order_segments(
+    order_id: str,
+    body:  QASegmentsBatchUpdate,
+    admin: dict             = Depends(get_admin_user),
+):
+    """
+    批量更新段落譯文與備註（Save as Draft / Save）。
+    """
+    translations = storage.read_temp_json(order_id, "translations.json")
+    if not translations:
+         raise HTTPException(status_code=404, detail="Translations not found")
+
+    trans_map = {t["index"]: t for t in translations}
+    for up in body.segments:
+        if up.index in trans_map:
+            trans_map[up.index]["translated"] = up.translated
+            if up.comments is not None:
+                trans_map[up.index]["comments"] = up.comments
+
+    storage.write_temp_json(order_id, "translations.json", list(trans_map.values()))
+    return MessageResponse(message="Segments updated")
+
+
+@router.post("/orders/{order_id}/qa-done", response_model=MessageResponse)
+async def mark_qa_done(
+    order_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """
+    完成 QA 審閱，將訂單狀態改為 delivered。
+    """
+    # 檢查該訂單是否存在
+    result = await db.execute(text("SELECT id FROM orders WHERE id = :id"), {"id": order_id})
+    if not result.fetchone():
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    await db.execute(text("""
+        UPDATE orders SET status = 'delivered', delivered_at = NOW() WHERE id = :id
+    """), {"id": order_id})
+    await db.commit()
+    return MessageResponse(message="QA Review completed, order delivered")
+
+
+@router.patch("/orders/{order_id}/status", response_model=MessageResponse)
+async def update_order_status(
+    order_id: str,
+    status:   str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """
+    手動更新訂單狀態（例如從 delivered 改回 qa_review）。
+    """
+    result = await db.execute(text("SELECT id FROM orders WHERE id = :id"), {"id": order_id})
+    if not result.fetchone():
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    await db.execute(text("""
+        UPDATE orders SET status = :status WHERE id = :id
+    """), {"status": status, "id": order_id})
+    await db.commit()
+    return MessageResponse(message=f"Order status updated to {status}")

@@ -89,3 +89,27 @@ def generate_download_signed_url(
         credentials = _get_signing_credentials(),
     )
     return signed_url
+
+
+def read_temp_json(order_id: str, filename: str) -> dict | list:
+    """從 temp bucket 讀取 JSON"""
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+    blob   = bucket.blob(f"pipeline/{order_id}/{filename}")
+    if not blob.exists():
+        return {}
+    data = blob.download_as_text(encoding="utf-8")
+    import json
+    return json.loads(data)
+
+
+def write_temp_json(order_id: str, filename: str, data: dict | list):
+    """寫入 JSON 到 temp bucket"""
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+    blob   = bucket.blob(f"pipeline/{order_id}/{filename}")
+    import json
+    blob.upload_from_string(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        content_type="application/json",
+    )
