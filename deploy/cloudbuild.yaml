@@ -50,15 +50,13 @@ steps:
       - --set-env-vars=GCS_UPLOADS_BUCKET=$PROJECT_ID-uploads-$_ENV
       - --set-env-vars=GCS_OUTPUTS_BUCKET=$PROJECT_ID-outputs-$_ENV
       - --set-env-vars=PUBSUB_TOPIC=ots-pipeline-trigger-$_ENV
-      - --set-env-vars=WEB_PORTAL_URL=$_WEB_PORTAL_URL
-      - --allow-unauthenticated
+      - --no-allow-unauthenticated
       - --min-instances=0
       - --max-instances=5
       - --quiet
 
 substitutions:
   _ENV: dev
-  _WEB_PORTAL_URL: 'http://localhost:3000'
 
 images:
   - asia-east1-docker.pkg.dev/$PROJECT_ID/ots/api-backend
