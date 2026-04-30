@@ -49,6 +49,7 @@ steps:
       - --set-env-vars=ENV=$_ENV
       - --set-env-vars=GCS_UPLOADS_BUCKET=$PROJECT_ID-uploads-$_ENV
       - --set-env-vars=GCS_OUTPUTS_BUCKET=$PROJECT_ID-outputs-$_ENV
+      - --set-env-vars=GCS_TEMP_BUCKET=$PROJECT_ID-pipeline-temp-$_ENV
       - --set-env-vars=PUBSUB_TOPIC=ots-pipeline-trigger-$_ENV
       - --no-allow-unauthenticated
       - --min-instances=0

@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     env: str                 = os.environ.get("ENV", "dev")
     gcs_uploads_bucket: str  = os.environ.get("GCS_UPLOADS_BUCKET", "")
     gcs_outputs_bucket: str  = os.environ.get("GCS_OUTPUTS_BUCKET", "")
+    gcs_temp_bucket:    str  = os.environ.get("GCS_TEMP_BUCKET", "ots-translation-pipeline-temp-dev")
     pubsub_topic: str        = os.environ.get("PUBSUB_TOPIC", "ots-pipeline-trigger-dev")
 
     # 金流廠商
