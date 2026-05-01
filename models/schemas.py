@@ -67,6 +67,8 @@ class UserProfileResponse(BaseModel):
     company_name:    Optional[str]
     tax_id:          Optional[str]
     invoice_carrier: Optional[str]
+    is_admin:        bool
+    is_editor:       bool
     created_at:      datetime
 
 
