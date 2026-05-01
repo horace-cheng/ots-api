@@ -257,6 +257,10 @@ class QASegmentsBatchUpdate(BaseModel):
     segments: List[QASegmentUpdate]
 
 
+class EditorAssignRequest(BaseModel):
+    editor_id: Optional[str] = None
+
+
 # ── 共用回傳 ──────────────────────────────────────────────────────────────────
 class MessageResponse(BaseModel):
     message: str

@@ -24,6 +24,7 @@ from models.schemas import (
     DownloadUrlResponse,
     UserListItem, UserListResponse, UserUpdateRequest,
     QASegment, QASegmentListResponse, QASegmentsBatchUpdate,
+    EditorAssignRequest,
 )
 from services.payment import (
     get_payment_gateway, InvoiceRequest, InvoiceType, InvoiceError
@@ -646,12 +647,13 @@ async def mark_qa_done(
 
 @router.patch("/orders/{order_id}/assign-editor", response_model=MessageResponse)
 async def assign_editor(
-    order_id:  str,
-    editor_id: str | None,
+    order_id: str,
+    body:     EditorAssignRequest,
     admin: dict        = Depends(get_admin_user),
     db:   AsyncSession = Depends(get_db),
 ):
     """指派或更換 Editor"""
+    editor_id = body.editor_id
     # 驗證 editor_id 是否合法（如果不是 None）
     if editor_id:
         res = await db.execute(

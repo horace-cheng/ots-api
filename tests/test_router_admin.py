@@ -485,7 +485,7 @@ class TestQAReviewEditor:
 
     def test_assign_editor_success(self, admin_client, mock_db):
         mock_db.execute.return_value.fetchone.return_value = MagicMock()
-        resp = admin_client.patch("/admin/orders/order-001/assign-editor", params={"editor_id": "editor-001"})
+        resp = admin_client.patch("/admin/orders/order-001/assign-editor", json={"editor_id": "editor-001"})
         assert resp.status_code == 200
         assert "editor assigned" in resp.json()["message"].lower()
 
