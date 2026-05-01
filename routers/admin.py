@@ -351,7 +351,7 @@ async def admin_list_orders(
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
             o.word_count, o.price_ntd, o.title, o.notes,
             o.created_at, o.deadline_at, o.delivered_at,
-            o.gcs_output_path,
+            o.gcs_output_path, o.editor_id,
             p.payment_status, p.invoice_no
         FROM orders o
         LEFT JOIN payments p ON p.order_id = o.id
@@ -383,7 +383,7 @@ async def admin_get_order(
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
             o.word_count, o.price_ntd, o.title, o.notes,
             o.created_at, o.deadline_at, o.delivered_at,
-            o.gcs_output_path,
+            o.gcs_output_path, o.editor_id,
             p.payment_status, p.invoice_no,
             pj.qa_result
         FROM orders o
@@ -463,7 +463,7 @@ async def list_users(
     result = await db.execute(text("""
         SELECT
             u.id, u.uid_firebase, u.email, u.client_type,
-            u.disabled, u.created_at,
+            u.disabled, u.created_at, u.is_editor,
             (au.id IS NOT NULL AND au.active = true) AS is_admin,
             au.role AS admin_role
         FROM users u
@@ -504,6 +504,12 @@ async def update_user(
         await db.execute(
             text("UPDATE users SET disabled = :disabled WHERE id = :id"),
             {"disabled": body.disabled, "id": user_id}
+        )
+
+    if body.is_editor is not None:
+        await db.execute(
+            text("UPDATE users SET is_editor = :is_editor WHERE id = :id"),
+            {"is_editor": body.is_editor, "id": user_id}
         )
 
     if body.is_admin is True:
@@ -581,10 +587,11 @@ async def get_order_segments(
         res_segments.append(QASegment(
             index      = idx,
             source     = s["text"],
-            translated = t.get("translated", ""),
-            raw        = raw_map.get(idx),
-            comments   = t.get("comments"),
-            flags      = flags_map.get(idx, []),
+            translated      = t.get("translated", ""),
+            raw             = raw_map.get(idx),
+            comments        = t.get("comments"),
+            editor_comments = t.get("editor_comments"),
+            flags           = flags_map.get(idx, []),
         ))
 
     return QASegmentListResponse(segments=res_segments)
@@ -609,6 +616,8 @@ async def update_order_segments(
             trans_map[up.index]["translated"] = up.translated
             if up.comments is not None:
                 trans_map[up.index]["comments"] = up.comments
+            if up.editor_comments is not None:
+                trans_map[up.index]["editor_comments"] = up.editor_comments
 
     storage.write_temp_json(order_id, "translations.json", list(trans_map.values()))
     return MessageResponse(message="Segments updated")
@@ -629,10 +638,34 @@ async def mark_qa_done(
         raise HTTPException(status_code=404, detail="Order not found")
 
     await db.execute(text("""
-        UPDATE orders SET status = 'delivered', delivered_at = NOW() WHERE id = :id
+        UPDATE orders SET status = 'editor_verify' WHERE id = :id
     """), {"id": order_id})
     await db.commit()
-    return MessageResponse(message="QA Review completed, order delivered")
+    return MessageResponse(message="QA Review completed, order moved to editor_verify")
+
+
+@router.patch("/orders/{order_id}/assign-editor", response_model=MessageResponse)
+async def assign_editor(
+    order_id:  str,
+    editor_id: str | None,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """指派或更換 Editor"""
+    # 驗證 editor_id 是否合法（如果不是 None）
+    if editor_id:
+        res = await db.execute(
+            text("SELECT id FROM users WHERE id = :id AND is_editor = true"),
+            {"id": editor_id}
+        )
+        if not res.fetchone():
+            raise HTTPException(status_code=400, detail="User is not an editor or not found")
+
+    await db.execute(text("""
+        UPDATE orders SET editor_id = :editor_id WHERE id = :id
+    """), {"editor_id": editor_id, "id": order_id})
+    await db.commit()
+    return MessageResponse(message="Editor assigned")
 
 
 @router.patch("/orders/{order_id}/status", response_model=MessageResponse)

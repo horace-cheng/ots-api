@@ -33,6 +33,7 @@ class OrderStatus(str, Enum):
     PAID            = "paid"
     PROCESSING      = "processing"
     QA_REVIEW       = "qa_review"
+    EDITOR_VERIFY   = "editor_verify"
     DELIVERED       = "delivered"
     CANCELLED       = "cancelled"
 
@@ -111,6 +112,7 @@ class OrderDetail(BaseModel):
     payment_status:  Optional[str]
     invoice_no:      Optional[str]
     gcs_output_path: Optional[str]
+    editor_id:       Optional[UUIDStr] = None
 
 class AdminOrderDetail(OrderDetail):
     qa_result: Optional[dict] = None
@@ -219,6 +221,7 @@ class UserListItem(BaseModel):
     disabled:     bool
     created_at:   datetime
     is_admin:     bool
+    is_editor:    bool
     admin_role:   Optional[str]
 
 class UserListResponse(BaseModel):
@@ -226,8 +229,9 @@ class UserListResponse(BaseModel):
     total: int
 
 class UserUpdateRequest(BaseModel):
-    disabled: Optional[bool] = None
-    is_admin: Optional[bool] = None
+    disabled:  Optional[bool] = None
+    is_admin:  Optional[bool] = None
+    is_editor: Optional[bool] = None
 
 
 # ── Admin: QA Review Editor ──────────────────────────────────────────────────
@@ -237,6 +241,7 @@ class QASegment(BaseModel):
     translated:     str
     raw:            Optional[str] = None
     comments:       Optional[str] = None
+    editor_comments: Optional[str] = None
     flags:          List[QAFlagResponse] = []
 
 class QASegmentListResponse(BaseModel):
@@ -246,6 +251,7 @@ class QASegmentUpdate(BaseModel):
     index:      int
     translated: str
     comments:   Optional[str] = None
+    editor_comments: Optional[str] = None
 
 class QASegmentsBatchUpdate(BaseModel):
     segments: List[QASegmentUpdate]

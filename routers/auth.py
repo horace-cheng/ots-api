@@ -40,7 +40,7 @@ async def get_current_user(
 
     # 首次登入：自動建立 users 記錄；後續登入：同步 email 快取
     result = await db.execute(
-        text("SELECT id, client_type, disabled FROM users WHERE uid_firebase = :uid"),
+        text("SELECT id, client_type, disabled, is_editor FROM users WHERE uid_firebase = :uid"),
         {"uid": uid}
     )
     user_row = result.fetchone()
@@ -54,7 +54,7 @@ async def get_current_user(
         await db.commit()
 
         result = await db.execute(
-            text("SELECT id, client_type, disabled FROM users WHERE uid_firebase = :uid"),
+            text("SELECT id, client_type, disabled, is_editor FROM users WHERE uid_firebase = :uid"),
             {"uid": uid}
         )
         user_row = result.fetchone()
@@ -74,6 +74,7 @@ async def get_current_user(
         "email":       email,
         "user_id":     str(user_row.id),
         "client_type": user_row.client_type,
+        "is_editor":   user_row.is_editor,
     }
 
 
@@ -104,3 +105,13 @@ async def get_admin_user(
         "admin_id": str(admin_row.id),
         "role":     admin_row.role,
     }
+
+
+async def get_editor_user(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Editor 端點用。確認 is_editor = true"""
+    if not current_user.get("is_editor"):
+        raise HTTPException(status_code=403, detail="Editor access required")
+
+    return current_user
