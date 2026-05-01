@@ -47,6 +47,36 @@ async def list_assigned_orders(
     return OrderListResponse(orders=orders, total=len(orders))
 
 
+@router.get("/orders/{order_id}", response_model=OrderDetail)
+async def get_editor_order(
+    order_id: str,
+    editor:   dict       = Depends(get_editor_user),
+    db:       AsyncSession = Depends(get_db),
+):
+    """取得指派給該 Editor 的訂單詳情"""
+    result = await db.execute(text("""
+        SELECT
+            o.id, o.track_type, o.status, o.source_lang, o.target_lang,
+            o.word_count, o.price_ntd, o.title, o.notes,
+            o.created_at, o.deadline_at, o.delivered_at,
+            o.gcs_output_path, o.editor_id,
+            p.payment_status, p.invoice_no
+        FROM orders o
+        LEFT JOIN payments p ON p.order_id = o.id
+        WHERE o.id = :id AND (o.editor_id = :editor_id OR :is_admin = true)
+    """), {
+        "id":        order_id,
+        "editor_id": editor["user_id"],
+        "is_admin":  editor.get("is_admin", False)
+    })
+
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found or access denied")
+
+    return OrderDetail(**dict(row._mapping))
+
+
 @router.get("/orders/{order_id}/segments", response_model=QASegmentListResponse)
 async def get_assigned_order_segments(
     order_id: str,

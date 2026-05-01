@@ -58,6 +58,40 @@ class TestEditorListOrders:
         assert len(data["orders"]) == 1
         assert data["orders"][0]["id"] == "order-001"
 
+
+class TestEditorGetOrder:
+    def test_get_order_success(self, editor_client, mock_db):
+        row = MagicMock()
+        row._mapping = {
+            "id": "order-001",
+            "track_type": "fast",
+            "status": "editor_verify",
+            "source_lang": "zh-tw",
+            "target_lang": "en",
+            "word_count": 1000,
+            "price_ntd": 2000,
+            "title": "Title",
+            "notes": None,
+            "created_at": datetime.now(timezone.utc),
+            "deadline_at": None,
+            "delivered_at": None,
+            "gcs_output_path": None,
+            "editor_id": "editor-db-id",
+            "payment_status": "paid",
+            "invoice_no": None
+        }
+        mock_db.execute.return_value.fetchone.return_value = row
+        
+        resp = editor_client.get("/editor/orders/order-001")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == "order-001"
+
+    def test_get_order_not_found(self, editor_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+        resp = editor_client.get("/editor/orders/nonexistent")
+        assert resp.status_code == 404
+
 class TestEditorSegments:
     @patch("core.storage.read_temp_json")
     def test_get_segments_success(self, mock_read, editor_client, mock_db):
