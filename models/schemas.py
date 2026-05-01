@@ -202,6 +202,14 @@ class AssignmentResponse(BaseModel):
     proofread_submitted_at: Optional[datetime]
 
 
+class QAFlagListResponse(BaseModel):
+    flags: List[QAFlagResponse]
+    total: int
+
+class AssignmentListResponse(BaseModel):
+    assignments: List[AssignmentResponse]
+    total: int
+
 # ── Admin: 帳號管理 ───────────────────────────────────────────────────────────
 class UserListItem(BaseModel):
     id:           UUIDStr
@@ -212,6 +220,10 @@ class UserListItem(BaseModel):
     created_at:   datetime
     is_admin:     bool
     admin_role:   Optional[str]
+
+class UserListResponse(BaseModel):
+    users: List[UserListItem]
+    total: int
 
 class UserUpdateRequest(BaseModel):
     disabled: Optional[bool] = None

@@ -17,12 +17,12 @@ from core import storage
 from core.storage import generate_download_signed_url
 from routers.auth import get_admin_user
 from models.schemas import (
-    QAFlagResponse, QAFlagResolve,
-    AssignmentUpdate, AssignmentResponse,
+    QAFlagResponse, QAFlagListResponse, QAFlagResolve,
+    AssignmentUpdate, AssignmentResponse, AssignmentListResponse,
     PaymentConfirm, MessageResponse,
     OrderDetail, AdminOrderDetail, OrderListResponse,
     DownloadUrlResponse,
-    UserListItem, UserUpdateRequest,
+    UserListItem, UserListResponse, UserUpdateRequest,
     QASegment, QASegmentListResponse, QASegmentsBatchUpdate,
 )
 from services.payment import (
@@ -35,7 +35,7 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 # ── QA Flags ──────────────────────────────────────────────────────────────────
-@router.get("/qa-flags", response_model=list[QAFlagResponse])
+@router.get("/qa-flags", response_model=QAFlagListResponse)
 async def list_qa_flags(
     flag_level: str | None = Query(None, description="must_fix / review / pass"),
     resolved:   bool | None = Query(False),
@@ -71,7 +71,16 @@ async def list_qa_flags(
     """), params)
 
     rows = result.fetchall()
-    return [QAFlagResponse(**dict(r._mapping)) for r in rows]
+    flags = [QAFlagResponse(**dict(r._mapping)) for r in rows]
+
+    count_result = await db.execute(text(f"""
+        SELECT COUNT(*) FROM qa_flags qf
+        JOIN pipeline_jobs pj ON pj.id = qf.job_id
+        {where}
+    """), {k: v for k, v in params.items() if k not in ("limit", "offset")})
+    total = count_result.scalar()
+
+    return QAFlagListResponse(flags=flags, total=total)
 
 
 @router.patch("/qa-flags/{flag_id}", response_model=MessageResponse)
@@ -226,15 +235,17 @@ async def issue_b2b_invoice(
 
 
 # ── Literary Track 指派管理 ───────────────────────────────────────────────────
-@router.get("/assignments", response_model=list[AssignmentResponse])
+@router.get("/assignments", response_model=AssignmentListResponse)
 async def list_assignments(
     status: str | None = Query(None),
+    limit:  int        = Query(50, ge=1, le=200),
+    offset: int        = Query(0, ge=0),
     admin: dict        = Depends(get_admin_user),
     db:   AsyncSession = Depends(get_db),
 ):
     """列出 Literary Track 指派狀態"""
     conditions = []
-    params: dict = {}
+    params: dict = {"limit": limit, "offset": offset}
 
     if status:
         conditions.append("la.status = :status")
@@ -250,10 +261,18 @@ async def list_assignments(
         FROM literary_assignments la
         {where}
         ORDER BY la.assigned_at DESC
+        LIMIT :limit OFFSET :offset
     """), params)
 
     rows = result.fetchall()
-    return [AssignmentResponse(**dict(r._mapping)) for r in rows]
+    assignments = [AssignmentResponse(**dict(r._mapping)) for r in rows]
+
+    count_result = await db.execute(text(f"""
+        SELECT COUNT(*) FROM literary_assignments la {where}
+    """), {k: v for k, v in params.items() if k not in ("limit", "offset")})
+    total = count_result.scalar()
+
+    return AssignmentListResponse(assignments=assignments, total=total)
 
 
 @router.patch("/assignments/{order_id}", response_model=AssignmentResponse)
@@ -428,12 +447,15 @@ async def mark_delivered(
 
 
 # ── Admin: 帳號管理 ───────────────────────────────────────────────────────────
-@router.get("/users", response_model=list[UserListItem])
+@router.get("/users", response_model=UserListResponse)
 async def list_users(
-    admin: dict        = Depends(get_admin_user),
-    db:   AsyncSession = Depends(get_db),
+    limit:  int          = Query(50, ge=1, le=200),
+    offset: int          = Query(0, ge=0),
+    admin: dict          = Depends(get_admin_user),
+    db:   AsyncSession   = Depends(get_db),
 ):
     """列出所有使用者帳號及其 admin 狀態"""
+    params = {"limit": limit, "offset": offset}
     result = await db.execute(text("""
         SELECT
             u.id, u.uid_firebase, u.email, u.client_type,
@@ -443,9 +465,15 @@ async def list_users(
         FROM users u
         LEFT JOIN admin_users au ON au.uid_firebase = u.uid_firebase AND au.active = true
         ORDER BY u.created_at DESC
-    """))
+        LIMIT :limit OFFSET :offset
+    """), params)
     rows = result.fetchall()
-    return [UserListItem(**dict(r._mapping)) for r in rows]
+    users = [UserListItem(**dict(r._mapping)) for r in rows]
+
+    count_result = await db.execute(text("SELECT COUNT(*) FROM users"))
+    total = count_result.scalar()
+
+    return UserListResponse(users=users, total=total)
 
 
 @router.patch("/users/{user_id}", response_model=MessageResponse)

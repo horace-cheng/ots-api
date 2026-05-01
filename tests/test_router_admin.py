@@ -112,6 +112,38 @@ class TestResolveQAFlag:
         assert resp.json()["message"] == "QA flag resolved"
 
 
+class TestListQAFlags:
+    def test_returns_paginated_flags(self, admin_client, mock_db):
+        row = MagicMock()
+        row._mapping = {
+            "id": "flag-001",
+            "job_id": "job-001",
+            "order_id": "order-001",
+            "paragraph_index": 5,
+            "flag_level": "must_fix",
+            "flag_type": "accuracy",
+            "source_segment": "Hello",
+            "translated_segment": "你好",
+            "reviewer_note": None,
+            "resolved": False,
+            "flagged_at": datetime.now(timezone.utc),
+        }
+        
+        res_list = MagicMock()
+        res_list.fetchall.return_value = [row]
+        res_count = MagicMock()
+        res_count.scalar.return_value = 1
+        mock_db.execute.side_effect = [res_list, res_count]
+
+        resp = admin_client.get("/admin/qa-flags?resolved=false&limit=10")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "flags" in data
+        assert data["total"] == 1
+        assert len(data["flags"]) == 1
+        assert data["flags"][0]["id"] == "flag-001"
+
+
 class TestAdminGetOrder:
     def _order_row(self, qa_result=None, gcs_output_path=None):
         from datetime import datetime, timezone
@@ -203,10 +235,13 @@ class TestAdminGetDownloadUrl:
 class TestListUsers:
     def test_returns_empty_list(self, admin_client, mock_db):
         mock_db.execute.return_value.fetchall.return_value = []
+        mock_db.execute.return_value.scalar.return_value = 0
 
         resp = admin_client.get("/admin/users")
         assert resp.status_code == 200
-        assert resp.json() == []
+        data = resp.json()
+        assert data["users"] == []
+        assert data["total"] == 0
 
     def test_returns_user_list(self, admin_client, mock_db):
         from datetime import datetime, timezone
@@ -221,14 +256,19 @@ class TestListUsers:
             "is_admin":     False,
             "admin_role":   None,
         }
-        mock_db.execute.return_value.fetchall.return_value = [row]
+        # First call for users list, second for count
+        res_list = MagicMock()
+        res_list.fetchall.return_value = [row]
+        res_count = MagicMock()
+        res_count.scalar.return_value = 1
+        mock_db.execute.side_effect = [res_list, res_count]
 
-        resp = admin_client.get("/admin/users")
+        resp = admin_client.get("/admin/users?limit=10&offset=0")
         assert resp.status_code == 200
         data = resp.json()
-        assert len(data) == 1
-        assert data[0]["email"] == "user@ots.tw"
-        assert data[0]["is_admin"] is False
+        assert len(data["users"]) == 1
+        assert data["users"][0]["email"] == "user@ots.tw"
+        assert data["total"] == 1
 
 
 class TestUpdateUser:
@@ -315,3 +355,115 @@ class TestUpdateAssignment:
         )
         assert resp.status_code == 200
         assert resp.json()["editor_id"] == "editor-001"
+
+
+class TestListAssignments:
+    def test_returns_paginated_assignments(self, admin_client, mock_db):
+        row = MagicMock()
+        row._mapping = {
+            "id": "assign-001",
+            "order_id": "order-001",
+            "editor_id": "editor-001",
+            "proofreader_id": None,
+            "status": "editing",
+            "assigned_at": datetime.now(timezone.utc),
+            "editor_submitted_at": None,
+            "proofread_submitted_at": None,
+        }
+        
+        res_list = MagicMock()
+        res_list.fetchall.return_value = [row]
+        res_count = MagicMock()
+        res_count.scalar.return_value = 1
+        mock_db.execute.side_effect = [res_list, res_count]
+
+        resp = admin_client.get("/admin/assignments?status=editing&limit=5")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "assignments" in data
+        assert data["total"] == 1
+        assert len(data["assignments"]) == 1
+        assert data["assignments"][0]["order_id"] == "order-001"
+
+
+class TestAdminListOrders:
+    def test_returns_paginated_orders(self, admin_client, mock_db):
+        from datetime import datetime, timezone
+        row = MagicMock()
+        row._mapping = {
+            "id":              "order-001",
+            "track_type":      "fast",
+            "status":          "paid",
+            "source_lang":     "zh-tw",
+            "target_lang":     "en",
+            "word_count":      1000,
+            "price_ntd":       2000,
+            "title":           None,
+            "notes":           None,
+            "created_at":      datetime(2026, 4, 27, tzinfo=timezone.utc),
+            "deadline_at":     None,
+            "delivered_at":    None,
+            "payment_status":  "paid",
+            "invoice_no":      None,
+            "gcs_output_path": None,
+        }
+        
+        res_list = MagicMock()
+        res_list.fetchall.return_value = [row]
+        res_count = MagicMock()
+        res_count.scalar.return_value = 1
+        mock_db.execute.side_effect = [res_list, res_count]
+
+        resp = admin_client.get("/admin/orders?limit=10")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "orders" in data
+        assert data["total"] == 1
+        assert len(data["orders"]) == 1
+
+
+class TestQAReviewEditor:
+    @patch("core.storage.read_temp_json")
+    def test_get_segments_success(self, mock_read, admin_client, mock_db):
+        mock_read.side_effect = [
+            [{"index": 0, "text": "Hello"}],  # segments
+            [{"index": 0, "translated": "你好"}], # translations
+            [{"index": 0, "translated": "你好 (raw)"}], # translations_raw
+        ]
+        
+        # Mock DB for flags
+        mock_db.execute.return_value.fetchall.return_value = []
+        
+        resp = admin_client.get("/admin/orders/order-001/segments")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["segments"]) == 1
+        assert data["segments"][0]["source"] == "Hello"
+        assert data["segments"][0]["translated"] == "你好"
+
+    @patch("core.storage.read_temp_json")
+    @patch("core.storage.write_temp_json")
+    def test_update_segments_success(self, mock_write, mock_read, admin_client):
+        mock_read.return_value = [{"index": 0, "translated": "old", "comments": None}]
+        
+        resp = admin_client.patch(
+            "/admin/orders/order-001/segments",
+            json={"segments": [{"index": 0, "translated": "new", "comments": "fixed"}]}
+        )
+        assert resp.status_code == 200
+        mock_write.assert_called_once()
+        args = mock_write.call_args[0]
+        # args[2] is the data written
+        assert args[2][0]["translated"] == "new"
+
+    def test_mark_qa_done_success(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = MagicMock()
+        resp = admin_client.post("/admin/orders/order-001/qa-done")
+        assert resp.status_code == 200
+        assert "delivered" in resp.json()["message"].lower()
+
+    def test_update_status_success(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = MagicMock()
+        resp = admin_client.patch("/admin/orders/order-001/status", params={"status": "qa_review"})
+        assert resp.status_code == 200
+        assert "status updated" in resp.json()["message"].lower()
