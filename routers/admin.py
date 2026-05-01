@@ -38,7 +38,8 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 @router.get("/qa-flags", response_model=QAFlagListResponse)
 async def list_qa_flags(
     flag_level: str | None = Query(None, description="must_fix / review / pass"),
-    resolved:   bool | None = Query(False),
+    resolved:   bool | None = Query(None),
+    order_id:   str | None = Query(None),
     limit:      int          = Query(50, ge=1, le=200),
     offset:     int          = Query(0, ge=0),
     admin: dict              = Depends(get_admin_user),
@@ -54,6 +55,9 @@ async def list_qa_flags(
     if resolved is not None:
         conditions.append("qf.resolved = :resolved")
         params["resolved"] = resolved
+    if order_id:
+        conditions.append("pj.order_id = :order_id")
+        params["order_id"] = order_id
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
