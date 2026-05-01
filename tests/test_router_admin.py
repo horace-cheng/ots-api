@@ -135,13 +135,26 @@ class TestListQAFlags:
         res_count.scalar.return_value = 1
         mock_db.execute.side_effect = [res_list, res_count]
 
-        resp = admin_client.get("/admin/qa-flags?resolved=false&limit=10")
+        resp = admin_client.get("/admin/qa-flags?resolved=false&limit=10&order_id=order-001")
         assert resp.status_code == 200
         data = resp.json()
         assert "flags" in data
         assert data["total"] == 1
         assert len(data["flags"]) == 1
         assert data["flags"][0]["id"] == "flag-001"
+
+    def test_list_all_flags_by_default(self, admin_client, mock_db):
+        res_list = MagicMock()
+        res_list.fetchall.return_value = []
+        res_count = MagicMock()
+        res_count.scalar.return_value = 0
+        mock_db.execute.side_effect = [res_list, res_count]
+
+        # No resolved param passed
+        resp = admin_client.get("/admin/qa-flags")
+        assert resp.status_code == 200
+        # Verify the query doesn't include WHERE resolved if possible, 
+        # but here we just check it doesn't crash.
 
 
 class TestAdminGetOrder:
@@ -254,6 +267,7 @@ class TestListUsers:
             "disabled":     False,
             "created_at":   datetime(2026, 4, 27, tzinfo=timezone.utc),
             "is_admin":     False,
+            "is_editor":    False,
             "admin_role":   None,
         }
         # First call for users list, second for count
@@ -324,6 +338,13 @@ class TestUpdateUser:
         mock_db.execute.return_value.fetchone.return_value = self._user_row()
 
         resp = admin_client.patch("/admin/users/user-001", json={"is_admin": False})
+        assert resp.status_code == 200
+        mock_db.commit.assert_awaited()
+
+    def test_update_is_editor_success(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._user_row()
+
+        resp = admin_client.patch("/admin/users/user-001", json={"is_editor": True})
         assert resp.status_code == 200
         mock_db.commit.assert_awaited()
 
@@ -460,7 +481,13 @@ class TestQAReviewEditor:
         mock_db.execute.return_value.fetchone.return_value = MagicMock()
         resp = admin_client.post("/admin/orders/order-001/qa-done")
         assert resp.status_code == 200
-        assert "delivered" in resp.json()["message"].lower()
+        assert "editor_verify" in resp.json()["message"].lower()
+
+    def test_assign_editor_success(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = MagicMock()
+        resp = admin_client.patch("/admin/orders/order-001/assign-editor", params={"editor_id": "editor-001"})
+        assert resp.status_code == 200
+        assert "editor assigned" in resp.json()["message"].lower()
 
     def test_update_status_success(self, admin_client, mock_db):
         mock_db.execute.return_value.fetchone.return_value = MagicMock()
