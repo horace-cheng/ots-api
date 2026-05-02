@@ -46,10 +46,11 @@ async def get_me(
     roles = data.get("roles") or []
     langs = data.get("languages") or []
     return UserProfileResponse(
-        **{**data, 
-           "is_admin": "admin" in roles, 
+        **{**data,
+           "roles":     roles,
+           "is_admin":  "admin" in roles,
            "is_editor": "editor" in roles,
-           "is_qa": "qa" in roles,
+           "is_qa":     "qa" in roles,
            "languages": langs}
     )
 
