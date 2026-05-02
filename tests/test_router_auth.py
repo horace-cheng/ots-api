@@ -87,9 +87,9 @@ class TestGetCurrentUser:
         # email UPDATE + commit should have been called
         mock_db.commit.assert_called()
 
-    def test_missing_auth_header_422(self, client):
+    def test_missing_auth_header_401(self, client):
         resp = client.get("/me")
-        assert resp.status_code == 422
+        assert resp.status_code == 401
 
     def test_invalid_format_not_bearer_401(self, client):
         resp = client.get("/me", headers={"Authorization": "Token not-a-bearer"})

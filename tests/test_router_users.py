@@ -39,9 +39,9 @@ class TestUsersMe:
             "company_name": None,
             "tax_id": None,
             "invoice_carrier": None,
-            "is_editor": False,
-            "is_admin": False,
-            "created_at": datetime.now(timezone.utc)
+            "created_at": datetime.now(timezone.utc),
+            "roles": ["editor"],
+            "languages": [{"source_lang": "zh-tw", "target_lang": "en"}]
         }
         mock_db.execute.return_value.fetchone.return_value = row
         
@@ -50,4 +50,46 @@ class TestUsersMe:
         data = resp.json()
         assert data["uid_firebase"] == "user-uid"
         assert data["is_admin"] is False
-        assert data["is_editor"] is False
+        assert data["is_editor"] is True
+        assert data["languages"][0]["source_lang"] == "zh-tw"
+
+class TestInvitations:
+    def test_create_invitation_success(self, user_client, mock_db):
+        # We assume the mock user is admin for this test
+        # In a real test we might want to override dependency per test
+        row = MagicMock()
+        row._mapping = {
+            "id": "invite-id",
+            "email": "new@ots.tw",
+            "role": "editor",
+            "token": "token-123",
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc),
+            "expires_at": datetime.now(timezone.utc)
+        }
+        mock_db.execute.return_value.fetchone.return_value = row
+        
+        # We need to ensure get_current_user returns is_admin=True
+        user_client.app.dependency_overrides[get_current_user] = lambda: {**MOCK_USER, "is_admin": True}
+        try:
+            resp = user_client.post("/users/invite", json={"email": "new@ots.tw", "role": "editor"})
+        finally:
+            user_client.app.dependency_overrides[get_current_user] = lambda: MOCK_USER
+    
+        assert resp.status_code == 200
+        assert resp.json()["token"] == "token-123"
+
+    def test_accept_invitation_success(self, user_client, mock_db):
+        from datetime import timedelta
+        invite_row = MagicMock()
+        invite_row.id = "invite-id"
+        invite_row.role = "qa"
+        invite_row.status = "pending"
+        invite_row.expires_at = datetime.now(timezone.utc) + timedelta(days=1)
+        
+        mock_db.execute.return_value.fetchone.return_value = invite_row
+        
+        resp = user_client.post("/users/accept-invite", json={"token": "token-123"})
+        assert resp.status_code == 200
+        assert "You are now a qa" in resp.json()["message"]
+        mock_db.commit.assert_awaited()

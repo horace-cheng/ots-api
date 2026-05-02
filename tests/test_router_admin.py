@@ -266,9 +266,8 @@ class TestListUsers:
             "client_type":  "b2c",
             "disabled":     False,
             "created_at":   datetime(2026, 4, 27, tzinfo=timezone.utc),
-            "is_admin":     False,
-            "is_editor":    False,
-            "admin_role":   None,
+            "roles":        ["editor"],
+            "languages":    [{"source_lang": "zh-tw", "target_lang": "en"}],
         }
         # First call for users list, second for count
         res_list = MagicMock()
@@ -483,14 +482,56 @@ class TestQAReviewEditor:
         assert resp.status_code == 200
         assert "editor_verify" in resp.json()["message"].lower()
 
-    def test_assign_editor_success(self, admin_client, mock_db):
+    def test_assign_editor_and_qa_success(self, admin_client, mock_db):
         mock_db.execute.return_value.fetchone.return_value = MagicMock()
-        resp = admin_client.patch("/admin/orders/order-001/assign-editor", json={"editor_id": "editor-001"})
+        resp = admin_client.patch(
+            "/admin/orders/order-001/assign-editor", 
+            json={"editor_id": "editor-001", "qa_id": "qa-001"}
+        )
         assert resp.status_code == 200
-        assert "editor assigned" in resp.json()["message"].lower()
+        assert "editor/qa assigned" in resp.json()["message"].lower()
 
     def test_update_status_success(self, admin_client, mock_db):
         mock_db.execute.return_value.fetchone.return_value = MagicMock()
         resp = admin_client.patch("/admin/orders/order-001/status", params={"status": "qa_review"})
         assert resp.status_code == 200
         assert "status updated" in resp.json()["message"].lower()
+
+
+class TestUserLanguages:
+    def test_update_languages_success(self, admin_client, mock_db):
+        resp = admin_client.put(
+            "/admin/users/user-001/languages",
+            json={"languages": [{"source_lang": "zh-tw", "target_lang": "en"}]}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["message"] == "Languages updated"
+        mock_db.commit.assert_awaited()
+
+
+class TestListEligibleUsers:
+    def test_success_returns_users(self, admin_client, mock_db):
+        order_row = MagicMock()
+        order_row.source_lang = "zh-tw"
+        order_row.target_lang = "en"
+        
+        user_row = MagicMock()
+        user_row._mapping = {
+            "id": "user-001",
+            "uid_firebase": "uid-001",
+            "email": "editor@ots.tw",
+            "client_type": "b2c",
+            "disabled": False,
+            "created_at": datetime.now(timezone.utc),
+            "roles": ["editor"],
+            "languages": [{"source_lang": "zh-tw", "target_lang": "en"}]
+        }
+        
+        mock_db.execute.return_value.fetchone.return_value = order_row
+        mock_db.execute.return_value.fetchall.return_value = [user_row]
+        
+        resp = admin_client.get("/admin/orders/order-001/eligible-users")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["users"]) == 1
+        assert data["users"][0]["is_editor"] is True

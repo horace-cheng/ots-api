@@ -12,11 +12,11 @@ import logging
 
 from core.database import get_db
 from core import storage
-from routers.auth import get_editor_user
+from routers.auth import get_editor_user, get_qa_user
 from models.schemas import (
     OrderDetail, OrderListResponse,
     QASegment, QASegmentListResponse, QASegmentsBatchUpdate,
-    MessageResponse, QAFlagResponse
+    MessageResponse, QAFlagResponse, EditorAssignRequest
 )
 
 logger = logging.getLogger(__name__)
@@ -25,22 +25,45 @@ router = APIRouter(prefix="/editor", tags=["editor"])
 
 @router.get("/orders", response_model=OrderListResponse)
 async def list_assigned_orders(
-    editor: dict       = Depends(get_editor_user),
+    user:   dict       = Depends(get_qa_user),
     db:     AsyncSession = Depends(get_db),
 ):
-    """列出指派給當前 Editor 的待審閱訂單"""
-    result = await db.execute(text("""
+    """列出指派給當前使用者 (Editor 或 QA) 的待審閱訂單"""
+    # 如果是 admin，看到所有待審閱
+    # 如果是 editor，看到 editor_id = me
+    # 如果是 qa，看到 qa_id = me
+    conditions = []
+    params = {"user_id": user["user_id"]}
+
+    if user.get("is_admin"):
+        conditions.append("o.status IN ('qa_review', 'editor_verify')")
+    else:
+        role_conds = []
+        if user.get("is_editor"):
+            role_conds.append("o.editor_id = :user_id")
+        if user.get("is_qa"):
+            role_conds.append("o.qa_id = :user_id")
+        
+        if not role_conds:
+             raise HTTPException(status_code=403, detail="No assigned roles found")
+        
+        conditions.append(f"({ ' OR '.join(role_conds) })")
+        conditions.append("o.status IN ('qa_review', 'editor_verify')")
+
+    where = " AND ".join(conditions)
+
+    result = await db.execute(text(f"""
         SELECT
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
             o.word_count, o.price_ntd, o.title, o.notes,
             o.created_at, o.deadline_at, o.delivered_at,
-            o.gcs_output_path, o.editor_id,
+            o.gcs_output_path, o.editor_id, o.qa_id,
             p.payment_status, p.invoice_no
         FROM orders o
         LEFT JOIN payments p ON p.order_id = o.id
-        WHERE o.editor_id = :editor_id AND o.status = 'editor_verify'
+        WHERE {where}
         ORDER BY o.created_at DESC
-    """), {"editor_id": editor["user_id"]})
+    """), params)
 
     rows = result.fetchall()
     orders = [OrderDetail(**dict(r._mapping)) for r in rows]
@@ -59,14 +82,14 @@ async def get_editor_order(
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
             o.word_count, o.price_ntd, o.title, o.notes,
             o.created_at, o.deadline_at, o.delivered_at,
-            o.gcs_output_path, o.editor_id,
+            o.gcs_output_path, o.editor_id, o.qa_id,
             p.payment_status, p.invoice_no
         FROM orders o
         LEFT JOIN payments p ON p.order_id = o.id
-        WHERE o.id = :id AND (o.editor_id = :editor_id OR :is_admin = true)
+        WHERE o.id = :id AND (o.editor_id = :user_id OR o.qa_id = :user_id OR :is_admin = true)
     """), {
         "id":        order_id,
-        "editor_id": editor["user_id"],
+        "user_id":   editor["user_id"],
         "is_admin":  editor.get("is_admin", False)
     })
 
@@ -80,17 +103,18 @@ async def get_editor_order(
 @router.get("/orders/{order_id}/segments", response_model=QASegmentListResponse)
 async def get_assigned_order_segments(
     order_id: str,
-    editor:   dict       = Depends(get_editor_user),
+    user:     dict       = Depends(get_qa_user),
     db:       AsyncSession = Depends(get_db),
 ):
-    """獲取指派訂單的段落資料"""
-    # 1. 驗證權限：訂單必須指派給該 Editor 且狀態為 editor_verify
+    """獲取指派訂單的段落資料 (Editor 或 QA 呼叫)"""
+    # 1. 驗證權限：訂單必須指派給該使用者
     res = await db.execute(text("""
-        SELECT id FROM orders 
-        WHERE id = :id AND editor_id = :editor_id AND status = 'editor_verify'
-    """), {"id": order_id, "editor_id": editor["user_id"]})
-    if not res.fetchone():
-        raise HTTPException(status_code=403, detail="Access denied or order not in editor_verify status")
+        SELECT id, editor_id, qa_id, status FROM orders 
+        WHERE id = :id AND (editor_id = :user_id OR qa_id = :user_id OR :is_admin = true)
+    """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+    order = res.fetchone()
+    if not order:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # 2. 從 GCS 讀取資料 (與 Admin 邏輯相同)
     segments_raw = storage.read_temp_json(order_id, "segments.json")
@@ -143,17 +167,17 @@ async def get_assigned_order_segments(
 async def update_assigned_order_segments(
     order_id: str,
     body:     QASegmentsBatchUpdate,
-    editor:   dict       = Depends(get_editor_user),
+    user:     dict       = Depends(get_qa_user),
     db:       AsyncSession = Depends(get_db),
 ):
-    """Editor 儲存草稿或更新譯文"""
+    """Editor 或 QA 儲存草稿"""
     # 驗證權限
     res = await db.execute(text("""
         SELECT id FROM orders 
-        WHERE id = :id AND editor_id = :editor_id AND status = 'editor_verify'
-    """), {"id": order_id, "editor_id": editor["user_id"]})
+        WHERE id = :id AND (editor_id = :user_id OR qa_id = :user_id OR :is_admin = true)
+    """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
     if not res.fetchone():
-        raise HTTPException(status_code=403, detail="Access denied or order not in editor_verify status")
+        raise HTTPException(status_code=403, detail="Access denied")
 
     translations = storage.read_temp_json(order_id, "translations.json")
     if not translations:
@@ -173,24 +197,36 @@ async def update_assigned_order_segments(
 
 
 @router.post("/orders/{order_id}/submit", response_model=MessageResponse)
-async def submit_editor_verify(
+async def submit_review(
     order_id: str,
-    editor:   dict       = Depends(get_editor_user),
+    user:     dict       = Depends(get_qa_user),
     db:       AsyncSession = Depends(get_db),
 ):
-    """Editor 完成審閱，將訂單狀態改為 delivered"""
+    """完成審閱。QA 提交後變為 editor_verify，Editor 提交後變為 delivered"""
     res = await db.execute(text("""
-        SELECT id FROM orders 
-        WHERE id = :id AND editor_id = :editor_id AND status = 'editor_verify'
-    """), {"id": order_id, "editor_id": editor["user_id"]})
-    if not res.fetchone():
-        raise HTTPException(status_code=403, detail="Access denied or order not in editor_verify status")
+        SELECT id, status, editor_id, qa_id FROM orders 
+        WHERE id = :id AND (editor_id = :user_id OR qa_id = :user_id OR :is_admin = true)
+    """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+    order = res.fetchone()
+    if not order:
+        raise HTTPException(status_code=403, detail="Access denied")
 
-    await db.execute(text("""
-        UPDATE orders SET status = 'delivered', delivered_at = NOW() WHERE id = :id
-    """), {"id": order_id})
+    # 判斷角色與狀態
+    is_qa_only = user.get("is_qa") and not user.get("is_editor") and not user.get("is_admin")
+    
+    if is_qa_only and order.status == 'qa_review':
+        new_status = 'editor_verify'
+        await db.execute(text("""
+            UPDATE orders SET status = :status, qa_submitted_at = NOW() WHERE id = :id
+        """), {"status": new_status, "id": order_id})
+    else:
+        new_status = 'delivered'
+        await db.execute(text("""
+            UPDATE orders SET status = :status, delivered_at = NOW() WHERE id = :id
+        """), {"status": new_status, "id": order_id})
+    
     await db.commit()
-    return MessageResponse(message="Verification completed, order delivered")
+    return MessageResponse(message=f"Review submitted. New status: {new_status}")
 
 
 @router.post("/orders/{order_id}/return", response_model=MessageResponse)
@@ -202,8 +238,8 @@ async def return_to_qa(
     """Editor 將訂單退回 qa_review 狀態"""
     res = await db.execute(text("""
         SELECT id FROM orders 
-        WHERE id = :id AND editor_id = :editor_id AND status = 'editor_verify'
-    """), {"id": order_id, "editor_id": editor["user_id"]})
+        WHERE id = :id AND (editor_id = :editor_id OR :is_admin = true) AND status = 'editor_verify'
+    """), {"id": order_id, "editor_id": editor["user_id"], "is_admin": editor.get("is_admin", False)})
     if not res.fetchone():
         raise HTTPException(status_code=403, detail="Access denied or order not in editor_verify status")
 
@@ -212,3 +248,34 @@ async def return_to_qa(
     """), {"id": order_id})
     await db.commit()
     return MessageResponse(message="Order returned to qa_review")
+
+
+@router.patch("/orders/{order_id}/assign-qa", response_model=MessageResponse)
+async def assign_qa_to_order(
+    order_id: str,
+    body:     EditorAssignRequest,
+    editor:   dict       = Depends(get_editor_user),
+    db:       AsyncSession = Depends(get_db),
+):
+    """Editor 將其指派訂單再指派給 QA"""
+    # 驗證該訂單是否指派給該 Editor
+    res = await db.execute(text("""
+        SELECT id FROM orders WHERE id = :id AND (editor_id = :user_id OR :is_admin = true)
+    """), {"id": order_id, "user_id": editor["user_id"], "is_admin": editor.get("is_admin", False)})
+    if not res.fetchone():
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    qa_id = body.qa_id
+    if qa_id:
+        # 驗證 qa_id 是否有 QA 角色
+        res = await db.execute(text("""
+            SELECT user_id FROM user_roles WHERE user_id = :id AND role = 'qa'
+        """), {"id": qa_id})
+        if not res.fetchone():
+            raise HTTPException(status_code=400, detail="User is not a QA or not found")
+
+    await db.execute(text("""
+        UPDATE orders SET qa_id = :qa_id WHERE id = :id
+    """), {"qa_id": qa_id, "id": order_id})
+    await db.commit()
+    return MessageResponse(message="QA assigned by editor")

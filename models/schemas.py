@@ -69,7 +69,17 @@ class UserProfileResponse(BaseModel):
     invoice_carrier: Optional[str]
     is_admin:        bool
     is_editor:       bool
+    is_qa:           bool
+    roles:           List[str] = []
+    languages:       List['UserLanguage'] = []
     created_at:      datetime
+
+class UserLanguage(BaseModel):
+    source_lang: str
+    target_lang: str
+
+class UserLanguageUpdate(BaseModel):
+    languages: List[UserLanguage]
 
 
 # ── Order ─────────────────────────────────────────────────────────────────────
@@ -115,6 +125,8 @@ class OrderDetail(BaseModel):
     invoice_no:      Optional[str]
     gcs_output_path: Optional[str]
     editor_id:       Optional[UUIDStr] = None
+    qa_id:           Optional[UUIDStr] = None
+    qa_submitted_at: Optional[datetime] = None
 
 class AdminOrderDetail(OrderDetail):
     qa_result: Optional[dict] = None
@@ -261,6 +273,25 @@ class QASegmentsBatchUpdate(BaseModel):
 
 class EditorAssignRequest(BaseModel):
     editor_id: Optional[str] = None
+    qa_id:     Optional[str] = None
+
+
+# ── Invitations ──────────────────────────────────────────────────────────────
+class InvitationCreate(BaseModel):
+    email: str
+    role:  str  # 'editor' or 'qa'
+
+class InvitationResponse(BaseModel):
+    id:         UUIDStr
+    email:      str
+    role:       str
+    token:      str
+    status:     str
+    created_at: datetime
+    expires_at: datetime
+
+class InvitationAccept(BaseModel):
+    token: str
 
 
 # ── 共用回傳 ──────────────────────────────────────────────────────────────────

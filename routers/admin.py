@@ -22,7 +22,7 @@ from models.schemas import (
     PaymentConfirm, MessageResponse,
     OrderDetail, AdminOrderDetail, OrderListResponse,
     DownloadUrlResponse,
-    UserListItem, UserListResponse, UserUpdateRequest,
+    UserListItem, UserListResponse, UserUpdateRequest, UserLanguageUpdate, UserLanguage,
     QASegment, QASegmentListResponse, QASegmentsBatchUpdate,
     EditorAssignRequest,
 )
@@ -464,16 +464,30 @@ async def list_users(
     result = await db.execute(text("""
         SELECT
             u.id, u.uid_firebase, u.email, u.client_type,
-            u.disabled, u.created_at, u.is_editor,
-            (au.id IS NOT NULL AND au.active = true) AS is_admin,
-            au.role AS admin_role
+            u.disabled, u.created_at,
+            array_agg(DISTINCT ur.role) FILTER (WHERE ur.role IS NOT NULL) as roles,
+            json_agg(DISTINCT jsonb_build_object('source_lang', ul.source_lang, 'target_lang', ul.target_lang)) FILTER (WHERE ul.source_lang IS NOT NULL) as languages
         FROM users u
-        LEFT JOIN admin_users au ON au.uid_firebase = u.uid_firebase AND au.active = true
+        LEFT JOIN user_roles ur ON ur.user_id = u.id
+        LEFT JOIN user_languages ul ON ul.user_id = u.id
+        GROUP BY u.id
         ORDER BY u.created_at DESC
         LIMIT :limit OFFSET :offset
     """), params)
     rows = result.fetchall()
-    users = [UserListItem(**dict(r._mapping)) for r in rows]
+    users = []
+    for r in rows:
+        d = dict(r._mapping)
+        roles = d.get("roles") or []
+        langs = d.get("languages") or []
+        users.append(UserListItem(
+            **{**d, 
+               "is_admin": "admin" in roles, 
+               "is_editor": "editor" in roles,
+               "is_qa": "qa" in roles,
+               "admin_role": "admin" if "admin" in roles else None,
+               "languages": langs}
+        ))
 
     count_result = await db.execute(text("SELECT COUNT(*) FROM users"))
     total = count_result.scalar()
@@ -508,12 +522,14 @@ async def update_user(
         )
 
     if body.is_editor is not None:
-        await db.execute(
-            text("UPDATE users SET is_editor = :is_editor WHERE id = :id"),
-            {"is_editor": body.is_editor, "id": user_id}
-        )
+        if body.is_editor:
+            await db.execute(text("INSERT INTO user_roles (user_id, role) VALUES (:id, 'editor') ON CONFLICT DO NOTHING"), {"id": user_id})
+        else:
+            await db.execute(text("DELETE FROM user_roles WHERE user_id = :id AND role = 'editor'"), {"id": user_id})
 
     if body.is_admin is True:
+        await db.execute(text("INSERT INTO user_roles (user_id, role) VALUES (:id, 'admin') ON CONFLICT DO NOTHING"), {"id": user_id})
+        # Keep admin_users table for now for backward compatibility or extra metadata
         await db.execute(text("""
             INSERT INTO admin_users (uid_firebase, email, role, active)
             VALUES (:uid, :email, 'admin', true)
@@ -524,6 +540,7 @@ async def update_user(
         # 防止 superadmin 自降
         if str(user_row.uid_firebase) == admin["uid"]:
             raise HTTPException(status_code=400, detail="Cannot remove your own admin role")
+        await db.execute(text("DELETE FROM user_roles WHERE user_id = :id AND role = 'admin'"), {"id": user_id})
         await db.execute(
             text("UPDATE admin_users SET active = false WHERE uid_firebase = :uid"),
             {"uid": user_row.uid_firebase}
@@ -654,20 +671,29 @@ async def assign_editor(
 ):
     """指派或更換 Editor"""
     editor_id = body.editor_id
-    # 驗證 editor_id 是否合法（如果不是 None）
+    qa_id     = body.qa_id
+
+    # 驗證 editor_id 是否合法
     if editor_id:
-        res = await db.execute(
-            text("SELECT id FROM users WHERE id = :id AND is_editor = true"),
-            {"id": editor_id}
-        )
+        res = await db.execute(text("""
+            SELECT user_id FROM user_roles WHERE user_id = :id AND role = 'editor'
+        """), {"id": editor_id})
         if not res.fetchone():
             raise HTTPException(status_code=400, detail="User is not an editor or not found")
 
+    # 驗證 qa_id 是否合法
+    if qa_id:
+        res = await db.execute(text("""
+            SELECT user_id FROM user_roles WHERE user_id = :id AND role = 'qa'
+        """), {"id": qa_id})
+        if not res.fetchone():
+            raise HTTPException(status_code=400, detail="User is not a QA or not found")
+
     await db.execute(text("""
-        UPDATE orders SET editor_id = :editor_id WHERE id = :id
-    """), {"editor_id": editor_id, "id": order_id})
+        UPDATE orders SET editor_id = :editor_id, qa_id = :qa_id WHERE id = :id
+    """), {"editor_id": editor_id, "qa_id": qa_id, "id": order_id})
     await db.commit()
-    return MessageResponse(message="Editor assigned")
+    return MessageResponse(message="Editor/QA assigned")
 
 
 @router.patch("/orders/{order_id}/status", response_model=MessageResponse)
@@ -689,3 +715,73 @@ async def update_order_status(
     """), {"status": status, "id": order_id})
     await db.commit()
     return MessageResponse(message=f"Order status updated to {status}")
+
+
+@router.put("/users/{user_id}/languages", response_model=MessageResponse)
+async def update_user_languages(
+    user_id: str,
+    body:    UserLanguageUpdate,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """更新使用者的語言能力映射"""
+    # 1. 刪除舊的
+    await db.execute(text("DELETE FROM user_languages WHERE user_id = :id"), {"id": user_id})
+    
+    # 2. 插入新的
+    for lang in body.languages:
+        await db.execute(text("""
+            INSERT INTO user_languages (user_id, source_lang, target_lang)
+            VALUES (:user_id, :source_lang, :target_lang)
+            ON CONFLICT DO NOTHING
+        """), {
+            "user_id":     user_id,
+            "source_lang": lang.source_lang,
+            "target_lang": lang.target_lang
+        })
+    
+    await db.commit()
+    return MessageResponse(message="Languages updated")
+
+
+@router.get("/orders/{order_id}/eligible-users", response_model=UserListResponse)
+async def list_eligible_users(
+    order_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """列出符合該訂單語言要求的 Editor 和 QA"""
+    # 1. 獲取訂單語言
+    res = await db.execute(text("SELECT source_lang, target_lang FROM orders WHERE id = :id"), {"id": order_id})
+    order = res.fetchone()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+        
+    # 2. 篩選符合條件的使用者
+    result = await db.execute(text("""
+        SELECT 
+            u.id, u.uid_firebase, u.email, u.client_type, u.disabled, u.created_at,
+            array_agg(DISTINCT ur.role) FILTER (WHERE ur.role IS NOT NULL) as roles,
+            json_agg(DISTINCT jsonb_build_object('source_lang', ul.source_lang, 'target_lang', ul.target_lang)) FILTER (WHERE ul.source_lang IS NOT NULL) as languages
+        FROM users u
+        JOIN user_languages ul ON ul.user_id = u.id
+        JOIN user_roles ur ON ur.user_id = u.id
+        WHERE ul.source_lang = :source AND ul.target_lang = :target
+        GROUP BY u.id
+    """), {"source": order.source_lang, "target": order.target_lang})
+    
+    rows = result.fetchall()
+    users = []
+    for r in rows:
+        d = dict(r._mapping)
+        roles = d.get("roles") or []
+        users.append(UserListItem(
+            **{**d, 
+               "is_admin": "admin" in roles, 
+               "is_editor": "editor" in roles,
+               "is_qa": "qa" in roles,
+               "admin_role": "admin" if "admin" in roles else None,
+               "languages": d.get("languages") or []}
+        ))
+        
+    return UserListResponse(users=users, total=len(users))

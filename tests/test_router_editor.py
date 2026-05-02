@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core.database import get_db
-from routers.auth import get_editor_user
+from routers.auth import get_editor_user, get_current_user, get_qa_user
 from routers.editor import router
 
 MOCK_EDITOR_USER = {
@@ -25,7 +25,9 @@ def editor_client(mock_db):
         yield mock_db
 
     app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: MOCK_EDITOR_USER
     app.dependency_overrides[get_editor_user] = lambda: MOCK_EDITOR_USER
+    app.dependency_overrides[get_qa_user] = lambda: MOCK_EDITOR_USER
 
     return TestClient(app)
 
@@ -47,12 +49,14 @@ class TestEditorListOrders:
             "delivered_at": None,
             "gcs_output_path": None,
             "editor_id": "editor-db-id",
+            "qa_id": None,
+            "qa_submitted_at": None,
             "payment_status": "paid",
             "invoice_no": None
         }
         mock_db.execute.return_value.fetchall.return_value = [row]
         
-        resp = editor_client.get("/editor/orders")
+        resp = editor_client.get("/editor/orders", headers={"Authorization": "Bearer dummy"})
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["orders"]) == 1
@@ -77,6 +81,8 @@ class TestEditorGetOrder:
             "delivered_at": None,
             "gcs_output_path": None,
             "editor_id": "editor-db-id",
+            "qa_id": None,
+            "qa_submitted_at": None,
             "payment_status": "paid",
             "invoice_no": None
         }
@@ -108,7 +114,7 @@ class TestEditorSegments:
         # Mock DB for flags
         mock_db.execute.return_value.fetchall.return_value = []
         
-        resp = editor_client.get("/editor/orders/order-001/segments")
+        resp = editor_client.get("/editor/orders/order-001/segments", headers={"Authorization": "Bearer dummy"})
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["segments"]) == 1
@@ -118,7 +124,7 @@ class TestEditorSegments:
         # Mock DB for permission check failure
         mock_db.execute.return_value.fetchone.return_value = None
         
-        resp = editor_client.get("/editor/orders/order-001/segments")
+        resp = editor_client.get("/editor/orders/order-001/segments", headers={"Authorization": "Bearer dummy"})
         assert resp.status_code == 403
 
     @patch("core.storage.read_temp_json")
@@ -129,7 +135,8 @@ class TestEditorSegments:
         
         resp = editor_client.patch(
             "/editor/orders/order-001/segments",
-            json={"segments": [{"index": 0, "translated": "new", "editor_comments": "edited"}]}
+            json={"segments": [{"index": 0, "translated": "new", "editor_comments": "edited"}]},
+            headers={"Authorization": "Bearer dummy"}
         )
         assert resp.status_code == 200
         mock_write.assert_called_once()
@@ -140,12 +147,12 @@ class TestEditorSegments:
 class TestEditorActions:
     def test_submit_success(self, editor_client, mock_db):
         mock_db.execute.return_value.fetchone.return_value = MagicMock()
-        resp = editor_client.post("/editor/orders/order-001/submit")
+        resp = editor_client.post("/editor/orders/order-001/submit", headers={"Authorization": "Bearer dummy"})
         assert resp.status_code == 200
         assert "delivered" in resp.json()["message"].lower()
 
     def test_return_success(self, editor_client, mock_db):
         mock_db.execute.return_value.fetchone.return_value = MagicMock()
-        resp = editor_client.post("/editor/orders/order-001/return")
+        resp = editor_client.post("/editor/orders/order-001/return", headers={"Authorization": "Bearer dummy"})
         assert resp.status_code == 200
         assert "returned to qa_review" in resp.json()["message"].lower()

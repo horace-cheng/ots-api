@@ -18,14 +18,14 @@ logger = logging.getLogger(__name__)
 
 
 async def get_current_user(
-    authorization: str = Header(..., description="Bearer {Firebase ID Token}"),
+    authorization: str | None = Header(None, description="Bearer {Firebase ID Token}"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """
     驗證 Firebase ID Token，回傳 user dict。
     首次登入時自動在 users 表建立記錄。
     """
-    if not authorization.startswith("Bearer "):
+    if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header format")
 
     token = authorization.removeprefix("Bearer ").strip()
@@ -39,10 +39,15 @@ async def get_current_user(
     email = decoded.get("email", "")
 
     # 首次登入：自動建立 users 記錄；後續登入：同步 email 快取
-    result = await db.execute(
-        text("SELECT id, client_type, disabled, is_editor FROM users WHERE uid_firebase = :uid"),
-        {"uid": uid}
-    )
+    result = await db.execute(text("""
+        SELECT 
+            u.id, u.client_type, u.disabled, 
+            array_agg(ur.role) FILTER (WHERE ur.role IS NOT NULL) as roles
+        FROM users u 
+        LEFT JOIN user_roles ur ON ur.user_id = u.id
+        WHERE u.uid_firebase = :uid
+        GROUP BY u.id
+    """), {"uid": uid})
     user_row = result.fetchone()
 
     if not user_row:
@@ -53,10 +58,15 @@ async def get_current_user(
         """), {"uid": uid, "email": email})
         await db.commit()
 
-        result = await db.execute(
-            text("SELECT id, client_type, disabled, is_editor FROM users WHERE uid_firebase = :uid"),
-            {"uid": uid}
-        )
+        result = await db.execute(text("""
+            SELECT 
+                u.id, u.client_type, u.disabled, 
+                array_agg(ur.role) FILTER (WHERE ur.role IS NOT NULL) as roles
+            FROM users u 
+            LEFT JOIN user_roles ur ON ur.user_id = u.id
+            WHERE u.uid_firebase = :uid
+            GROUP BY u.id
+        """), {"uid": uid})
         user_row = result.fetchone()
     elif email and not user_row.disabled:
         # 同步 email（Firebase 為源頭，DB 為快取）
@@ -69,12 +79,16 @@ async def get_current_user(
     if user_row.disabled:
         raise HTTPException(status_code=403, detail="Account is disabled")
 
+    roles = user_row.roles or []
     return {
         "uid":         uid,
         "email":       email,
         "user_id":     str(user_row.id),
         "client_type": user_row.client_type,
-        "is_editor":   user_row.is_editor,
+        "roles":       roles,
+        "is_editor":   "editor" in roles,
+        "is_admin":    "admin" in roles,
+        "is_qa":       "qa" in roles,
     }
 
 
@@ -113,5 +127,15 @@ async def get_editor_user(
     """Editor 端點用。確認 is_editor = true"""
     if not current_user.get("is_editor"):
         raise HTTPException(status_code=403, detail="Editor access required")
+
+    return current_user
+
+
+async def get_qa_user(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """QA 端點用。確認 is_qa = true"""
+    if not current_user.get("is_qa") and not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="QA access required")
 
     return current_user
