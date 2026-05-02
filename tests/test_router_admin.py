@@ -347,6 +347,38 @@ class TestUpdateUser:
         assert resp.status_code == 200
         mock_db.commit.assert_awaited()
 
+    def test_grant_qa_success(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._user_row()
+
+        resp = admin_client.patch("/admin/users/user-001", json={"is_qa": True})
+        assert resp.status_code == 200
+        assert resp.json()["message"] == "User updated"
+        mock_db.commit.assert_awaited()
+
+    def test_revoke_qa_success(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._user_row()
+
+        resp = admin_client.patch("/admin/users/user-001", json={"is_qa": False})
+        assert resp.status_code == 200
+        mock_db.commit.assert_awaited()
+
+    def test_revoke_editor_success(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._user_row()
+
+        resp = admin_client.patch("/admin/users/user-001", json={"is_editor": False})
+        assert resp.status_code == 200
+        mock_db.commit.assert_awaited()
+
+    def test_cannot_disable_own_account_when_re_enabling(self, admin_client, mock_db):
+        """disabled=False on own account is allowed (only True is blocked)."""
+        from tests.factories import MOCK_ADMIN_USER
+        mock_db.execute.return_value.fetchone.return_value = self._user_row(
+            uid=MOCK_ADMIN_USER["uid"]
+        )
+        resp = admin_client.patch("/admin/users/admin-db-id", json={"disabled": False})
+        # Re-enabling own account is fine — only disabling is blocked
+        assert resp.status_code == 200
+
 
 class TestUpdateAssignment:
     def test_no_fields_returns_400(self, admin_client):
@@ -514,7 +546,7 @@ class TestListEligibleUsers:
         order_row = MagicMock()
         order_row.source_lang = "zh-tw"
         order_row.target_lang = "en"
-        
+
         user_row = MagicMock()
         user_row._mapping = {
             "id": "user-001",
@@ -526,12 +558,115 @@ class TestListEligibleUsers:
             "roles": ["editor"],
             "languages": [{"source_lang": "zh-tw", "target_lang": "en"}]
         }
-        
+
         mock_db.execute.return_value.fetchone.return_value = order_row
         mock_db.execute.return_value.fetchall.return_value = [user_row]
-        
+
         resp = admin_client.get("/admin/orders/order-001/eligible-users")
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["users"]) == 1
         assert data["users"][0]["is_editor"] is True
+
+    def test_order_not_found_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+
+        resp = admin_client.get("/admin/orders/nonexistent/eligible-users")
+        assert resp.status_code == 404
+
+    def test_returns_empty_when_no_eligible_users(self, admin_client, mock_db):
+        order_row = MagicMock()
+        order_row.source_lang = "tai-lo"
+        order_row.target_lang = "zh-tw"
+
+        mock_db.execute.return_value.fetchone.return_value = order_row
+        mock_db.execute.return_value.fetchall.return_value = []
+
+        resp = admin_client.get("/admin/orders/order-001/eligible-users")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["users"] == []
+        assert data["total"] == 0
+
+
+class TestAssignEditor:
+    def test_assign_editor_invalid_role_returns_400(self, admin_client, mock_db):
+        """editor_id points to a user who lacks the editor role."""
+        # First call (editor check) returns None → not an editor
+        mock_db.execute.return_value.fetchone.return_value = None
+
+        resp = admin_client.patch(
+            "/admin/orders/order-001/assign-editor",
+            json={"editor_id": "not-an-editor"}
+        )
+        assert resp.status_code == 400
+        assert "not an editor" in resp.json()["detail"].lower()
+
+    def test_assign_qa_invalid_role_returns_400(self, admin_client, mock_db):
+        """qa_id points to a user who lacks the qa role."""
+        mock_db.execute.return_value.fetchone.return_value = None
+
+        resp = admin_client.patch(
+            "/admin/orders/order-001/assign-editor",
+            json={"qa_id": "not-a-qa"}
+        )
+        assert resp.status_code == 400
+        assert "not a qa" in resp.json()["detail"].lower()
+
+
+class TestMarkDelivered:
+    def test_success(self, admin_client, mock_db):
+        row = MagicMock()
+        row.status = "editor_verify"
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        resp = admin_client.post(
+            "/admin/orders/order-001/deliver",
+            params={"gcs_output_path": "orders/order-001/output.docx"}
+        )
+        assert resp.status_code == 200
+        assert "delivered" in resp.json()["message"].lower()
+        mock_db.commit.assert_awaited()
+
+    def test_order_not_found_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+
+        resp = admin_client.post(
+            "/admin/orders/nonexistent/deliver",
+            params={"gcs_output_path": "orders/x/output.docx"}
+        )
+        assert resp.status_code == 404
+
+    def test_already_delivered_returns_400(self, admin_client, mock_db):
+        row = MagicMock()
+        row.status = "delivered"
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        resp = admin_client.post(
+            "/admin/orders/order-001/deliver",
+            params={"gcs_output_path": "orders/order-001/output.docx"}
+        )
+        assert resp.status_code == 400
+        assert "already delivered" in resp.json()["detail"].lower()
+
+
+class TestAdminOrderStatus:
+    def test_order_not_found_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+
+        resp = admin_client.patch(
+            "/admin/orders/nonexistent/status",
+            params={"status": "qa_review"}
+        )
+        assert resp.status_code == 404
+
+    def test_update_to_each_valid_status(self, admin_client, mock_db):
+        for status in ("qa_review", "editor_verify", "delivered", "processing"):
+            mock_db.reset_mock()
+            mock_db.execute.return_value.fetchone.return_value = MagicMock()
+            resp = admin_client.patch(
+                "/admin/orders/order-001/status",
+                params={"status": status}
+            )
+            assert resp.status_code == 200
+            assert status in resp.json()["message"]

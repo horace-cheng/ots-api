@@ -248,6 +248,7 @@ class UserUpdateRequest(BaseModel):
     disabled:  Optional[bool] = None
     is_admin:  Optional[bool] = None
     is_editor: Optional[bool] = None
+    is_qa:     Optional[bool] = None
 
 
 # ── Admin: QA Review Editor ──────────────────────────────────────────────────

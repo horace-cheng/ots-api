@@ -151,11 +151,56 @@ class TestEditorActions:
         assert resp.status_code == 200
         assert "delivered" in resp.json()["message"].lower()
 
+    def test_submit_as_qa_only_moves_to_editor_verify(self, mock_db):
+        """QA-only user submitting a qa_review order should transition to editor_verify, not delivered."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from core.database import get_db
+        from routers.auth import get_qa_user
+        from routers.editor import router
+
+        QA_ONLY_USER = {
+            "uid": "qa-uid",
+            "email": "qa@ots.tw",
+            "user_id": "qa-db-id",
+            "client_type": "b2c",
+            "is_qa": True,
+            "is_editor": False,
+            "is_admin": False,
+        }
+
+        app = FastAPI()
+        app.include_router(router)
+
+        async def override_db():
+            yield mock_db
+
+        app.dependency_overrides[get_db] = override_db
+        app.dependency_overrides[get_qa_user] = lambda: QA_ONLY_USER
+
+        order = MagicMock()
+        order.status = "qa_review"
+        order.editor_id = "editor-db-id"
+        order.qa_id = "qa-db-id"
+        mock_db.execute.return_value.fetchone.return_value = order
+
+        client = TestClient(app)
+        resp = client.post("/editor/orders/order-001/submit")
+        assert resp.status_code == 200
+        assert "editor_verify" in resp.json()["message"].lower()
+
     def test_return_success(self, editor_client, mock_db):
         mock_db.execute.return_value.fetchone.return_value = MagicMock()
         resp = editor_client.post("/editor/orders/order-001/return", headers={"Authorization": "Bearer dummy"})
         assert resp.status_code == 200
         assert "returned to qa_review" in resp.json()["message"].lower()
+
+    def test_return_access_denied_when_not_assigned(self, editor_client, mock_db):
+        """Return is denied if the order isn't assigned to this editor or isn't in editor_verify."""
+        mock_db.execute.return_value.fetchone.return_value = None
+        resp = editor_client.post("/editor/orders/order-002/return", headers={"Authorization": "Bearer dummy"})
+        assert resp.status_code == 403
+
 
 
 class TestEditorTeam:
