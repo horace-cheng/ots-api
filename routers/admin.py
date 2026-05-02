@@ -527,6 +527,12 @@ async def update_user(
         else:
             await db.execute(text("DELETE FROM user_roles WHERE user_id = :id AND role = 'editor'"), {"id": user_id})
 
+    if body.is_qa is not None:
+        if body.is_qa:
+            await db.execute(text("INSERT INTO user_roles (user_id, role) VALUES (:id, 'qa') ON CONFLICT DO NOTHING"), {"id": user_id})
+        else:
+            await db.execute(text("DELETE FROM user_roles WHERE user_id = :id AND role = 'qa'"), {"id": user_id})
+
     if body.is_admin is True:
         await db.execute(text("INSERT INTO user_roles (user_id, role) VALUES (:id, 'admin') ON CONFLICT DO NOTHING"), {"id": user_id})
         # Keep admin_users table for now for backward compatibility or extra metadata
