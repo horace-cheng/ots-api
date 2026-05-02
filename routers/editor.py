@@ -16,7 +16,8 @@ from routers.auth import get_editor_user, get_qa_user
 from models.schemas import (
     OrderDetail, OrderListResponse,
     QASegment, QASegmentListResponse, QASegmentsBatchUpdate,
-    MessageResponse, QAFlagResponse, EditorAssignRequest
+    MessageResponse, QAFlagResponse, EditorAssignRequest,
+    UserListResponse, UserListItem
 )
 
 logger = logging.getLogger(__name__)
@@ -248,6 +249,42 @@ async def return_to_qa(
     """), {"id": order_id})
     await db.commit()
     return MessageResponse(message="Order returned to qa_review")
+
+
+@router.get("/team", response_model=UserListResponse)
+async def list_my_qas(
+    editor: dict       = Depends(get_editor_user),
+    db:     AsyncSession = Depends(get_db),
+):
+    """列出該 Editor 邀請過的 QA 或參與過其訂單的 QA"""
+    # 這裡簡單定義為：經由該 Editor 邀請且已接受的 QA
+    result = await db.execute(text("""
+        SELECT 
+            u.id, u.uid_firebase, u.email, u.client_type, u.disabled, u.created_at,
+            array_agg(DISTINCT ur.role) FILTER (WHERE ur.role IS NOT NULL) as roles,
+            json_agg(DISTINCT jsonb_build_object('source_lang', ul.source_lang, 'target_lang', ul.target_lang)) FILTER (WHERE ul.source_lang IS NOT NULL) as languages
+        FROM users u
+        JOIN invitations i ON i.email = u.email AND i.inviter_id = :editor_id AND i.role = 'qa'
+        JOIN user_roles ur ON ur.user_id = u.id
+        LEFT JOIN user_languages ul ON ul.user_id = u.id
+        GROUP BY u.id
+    """), {"editor_id": editor["user_id"]})
+    
+    rows = result.fetchall()
+    users = []
+    for r in rows:
+        d = dict(r._mapping)
+        roles = d.get("roles") or []
+        users.append(UserListItem(
+            **{**d, 
+               "is_admin": "admin" in roles, 
+               "is_editor": "editor" in roles,
+               "is_qa": "qa" in roles,
+               "admin_role": "admin" if "admin" in roles else None,
+               "languages": d.get("languages") or []}
+        ))
+        
+    return UserListResponse(users=users, total=len(users))
 
 
 @router.patch("/orders/{order_id}/assign-qa", response_model=MessageResponse)

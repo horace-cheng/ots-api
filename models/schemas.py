@@ -236,7 +236,9 @@ class UserListItem(BaseModel):
     created_at:   datetime
     is_admin:     bool
     is_editor:    bool
+    is_qa:        bool
     admin_role:   Optional[str]
+    languages:    List[UserLanguage] = []
 
 class UserListResponse(BaseModel):
     users: List[UserListItem]

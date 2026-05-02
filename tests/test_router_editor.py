@@ -156,3 +156,62 @@ class TestEditorActions:
         resp = editor_client.post("/editor/orders/order-001/return", headers={"Authorization": "Bearer dummy"})
         assert resp.status_code == 200
         assert "returned to qa_review" in resp.json()["message"].lower()
+
+
+class TestEditorTeam:
+    def test_list_team_success(self, editor_client, mock_db):
+        row = MagicMock()
+        row._mapping = {
+            "id": "qa-001",
+            "uid_firebase": "qa-uid-001",
+            "email": "qa@ots.tw",
+            "client_type": "b2c",
+            "disabled": False,
+            "created_at": datetime.now(timezone.utc),
+            "roles": ["qa"],
+            "languages": [{"source_lang": "zh-tw", "target_lang": "en"}]
+        }
+        mock_db.execute.return_value.fetchall.return_value = [row]
+        
+        resp = editor_client.get("/editor/team", headers={"Authorization": "Bearer dummy"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["users"]) == 1
+        assert data["users"][0]["is_qa"] is True
+
+class TestEditorAssignQA:
+    def test_assign_qa_success(self, editor_client, mock_db):
+        # 1. Permission check
+        # 2. QA role check
+        mock_db.execute.return_value.fetchone.side_effect = [MagicMock(), MagicMock()]
+        
+        resp = editor_client.patch(
+            "/editor/orders/order-001/assign-qa", 
+            json={"qa_id": "qa-001"},
+            headers={"Authorization": "Bearer dummy"}
+        )
+        assert resp.status_code == 200
+        assert "qa assigned" in resp.json()["message"].lower()
+
+    def test_assign_qa_not_found(self, editor_client, mock_db):
+        # Permission check fails
+        mock_db.execute.return_value.fetchone.return_value = None
+        
+        resp = editor_client.patch(
+            "/editor/orders/order-001/assign-qa", 
+            json={"qa_id": "qa-001"},
+            headers={"Authorization": "Bearer dummy"}
+        )
+        assert resp.status_code == 403
+
+    def test_assign_qa_invalid_role(self, editor_client, mock_db):
+        # Permission check success, but QA role check fails
+        mock_db.execute.return_value.fetchone.side_effect = [MagicMock(), None]
+        
+        resp = editor_client.patch(
+            "/editor/orders/order-001/assign-qa", 
+            json={"qa_id": "invalid-id"},
+            headers={"Authorization": "Bearer dummy"}
+        )
+        assert resp.status_code == 400
+        assert "not a qa" in resp.json()["detail"].lower()
