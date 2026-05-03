@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core.database import get_db
-from routers.auth import get_editor_user, get_current_user, get_qa_user
+from routers.auth import get_editor_user, get_current_user, get_qa_user, get_reviewer_user
 from routers.editor import router
 
 MOCK_EDITOR_USER = {
@@ -13,7 +13,9 @@ MOCK_EDITOR_USER = {
     "email": "editor@ots.tw",
     "user_id": "editor-db-id",
     "client_type": "b2c",
-    "is_editor": True
+    "is_editor": True,
+    "is_qa": False,
+    "is_admin": False,
 }
 
 @pytest.fixture
@@ -27,7 +29,7 @@ def editor_client(mock_db):
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = lambda: MOCK_EDITOR_USER
     app.dependency_overrides[get_editor_user] = lambda: MOCK_EDITOR_USER
-    app.dependency_overrides[get_qa_user] = lambda: MOCK_EDITOR_USER
+    app.dependency_overrides[get_reviewer_user] = lambda: MOCK_EDITOR_USER
 
     return TestClient(app)
 
@@ -156,7 +158,7 @@ class TestEditorActions:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
         from core.database import get_db
-        from routers.auth import get_qa_user
+        from routers.auth import get_reviewer_user
         from routers.editor import router
 
         QA_ONLY_USER = {
@@ -176,7 +178,7 @@ class TestEditorActions:
             yield mock_db
 
         app.dependency_overrides[get_db] = override_db
-        app.dependency_overrides[get_qa_user] = lambda: QA_ONLY_USER
+        app.dependency_overrides[get_reviewer_user] = lambda: QA_ONLY_USER
 
         order = MagicMock()
         order.status = "qa_review"
@@ -260,3 +262,120 @@ class TestEditorAssignQA:
         )
         assert resp.status_code == 400
         assert "not a qa" in resp.json()["detail"].lower()
+
+
+class TestQaCannotAccessEditorOnlyEndpoints:
+    """QA users should NOT be able to access editor-only endpoints."""
+
+    def _qa_only_user(self):
+        return {
+            "uid": "qa-uid",
+            "email": "qa@ots.tw",
+            "user_id": "qa-db-id",
+            "client_type": "b2c",
+            "is_qa": True,
+            "is_editor": False,
+            "is_admin": False,
+        }
+
+    def _make_qa_app(self, mock_db):
+        app = FastAPI()
+        app.include_router(router)
+
+        async def override_db():
+            yield mock_db
+
+        app.dependency_overrides[get_db] = override_db
+        app.dependency_overrides[get_reviewer_user] = lambda: self._qa_only_user()
+        app.dependency_overrides[get_current_user] = lambda: self._qa_only_user()
+
+        return TestClient(app)
+
+    def test_qa_cannot_list_team(self, mock_db):
+        """QA users cannot access /editor/team."""
+        client = self._make_qa_app(mock_db)
+        resp = client.get("/editor/team")
+        assert resp.status_code == 403
+
+    def test_qa_cannot_assign_qa_to_order(self, mock_db):
+        """QA users cannot assign QA to orders."""
+        client = self._make_qa_app(mock_db)
+        resp = client.patch("/editor/orders/order-001/assign-qa", json={"qa_id": "qa-002"})
+        assert resp.status_code == 403
+
+    def test_qa_cannot_return_order(self, mock_db):
+        """QA users cannot return orders to QA review."""
+        client = self._make_qa_app(mock_db)
+        resp = client.post("/editor/orders/order-001/return")
+        assert resp.status_code == 403
+
+
+class TestQaAccessSharedEndpoints:
+    """QA users SHOULD be able to access shared endpoints."""
+
+    def _qa_only_user(self):
+        return {
+            "uid": "qa-uid",
+            "email": "qa@ots.tw",
+            "user_id": "qa-db-id",
+            "client_type": "b2c",
+            "is_qa": True,
+            "is_editor": False,
+            "is_admin": False,
+        }
+
+    def _make_qa_app(self, mock_db):
+        app = FastAPI()
+        app.include_router(router)
+
+        async def override_db():
+            yield mock_db
+
+        app.dependency_overrides[get_db] = override_db
+        app.dependency_overrides[get_reviewer_user] = lambda: self._qa_only_user()
+        app.dependency_overrides[get_current_user] = lambda: self._qa_only_user()
+
+        return TestClient(app)
+
+    def test_qa_can_list_assigned_orders(self, mock_db):
+        row = MagicMock()
+        row._mapping = {
+            "id": "order-001",
+            "track_type": "fast",
+            "status": "qa_review",
+            "source_lang": "zh-tw",
+            "target_lang": "en",
+            "word_count": 1000,
+            "price_ntd": 2000,
+            "title": "Title",
+            "notes": None,
+            "created_at": datetime.now(timezone.utc),
+            "deadline_at": None,
+            "delivered_at": None,
+            "gcs_output_path": None,
+            "editor_id": "editor-db-id",
+            "qa_id": "qa-db-id",
+            "qa_submitted_at": None,
+            "payment_status": "paid",
+            "invoice_no": None
+        }
+        mock_db.execute.return_value.fetchall.return_value = [row]
+
+        client = self._make_qa_app(mock_db)
+        resp = client.get("/editor/orders")
+        assert resp.status_code == 200
+        assert len(resp.json()["orders"]) == 1
+
+    @patch("core.storage.read_temp_json")
+    def test_qa_can_get_segments(self, mock_read, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = MagicMock()
+        mock_read.side_effect = [
+            [{"index": 0, "text": "Source"}],
+            [{"index": 0, "translated": "Translated"}],
+            [{"index": 0, "translated": "Raw"}]
+        ]
+        mock_db.execute.return_value.fetchall.return_value = []
+
+        client = self._make_qa_app(mock_db)
+        resp = client.get("/editor/orders/order-001/segments")
+        assert resp.status_code == 200

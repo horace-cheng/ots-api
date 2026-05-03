@@ -1,10 +1,12 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.testclient import TestClient
 
 from core.database import get_db
-from routers.auth import get_current_user, get_admin_user
+from routers.auth import (
+    get_current_user, get_admin_user, get_editor_user, get_qa_user, get_reviewer_user
+)
 
 DECODED_TOKEN = {
     "uid": "firebase-uid-001",
@@ -147,3 +149,187 @@ class TestGetAdminUser:
             resp = client.get("/admin-only", headers={"Authorization": "Bearer token"})
         assert resp.status_code == 403
         assert "disabled" in resp.json()["detail"]
+
+
+class TestGetEditorUser:
+    """Test editor-only access via HTTP endpoints."""
+
+    @pytest.fixture
+    def editor_app(self, mock_db):
+        app = FastAPI()
+
+        async def override_db():
+            yield mock_db
+
+        app.dependency_overrides[get_db] = override_db
+
+        @app.get("/editor-only")
+        async def editor_endpoint(user: dict = Depends(get_editor_user)):
+            return {"uid": user["uid"]}
+
+        return app, mock_db
+
+    def test_editor_passes(self, editor_app):
+        app, _ = editor_app
+        app.dependency_overrides[get_current_user] = lambda: {
+            "uid": "u1", "is_editor": True, "is_admin": False
+        }
+        with TestClient(app) as c:
+            resp = c.get("/editor-only")
+        assert resp.status_code == 200
+
+    def test_admin_passes_as_editor(self, editor_app):
+        """Admin users should also have access to editor endpoints."""
+        app, _ = editor_app
+        app.dependency_overrides[get_current_user] = lambda: {
+            "uid": "u1", "is_editor": False, "is_admin": True
+        }
+        with TestClient(app) as c:
+            resp = c.get("/editor-only")
+        assert resp.status_code == 200
+
+    def test_editor_and_admin_passes(self, editor_app):
+        app, _ = editor_app
+        app.dependency_overrides[get_current_user] = lambda: {
+            "uid": "u1", "is_editor": True, "is_admin": True
+        }
+        with TestClient(app) as c:
+            resp = c.get("/editor-only")
+        assert resp.status_code == 200
+
+    def test_regular_user_fails_403(self, editor_app):
+        app, _ = editor_app
+        app.dependency_overrides[get_current_user] = lambda: {
+            "uid": "u1", "is_editor": False, "is_admin": False
+        }
+        with TestClient(app) as c:
+            resp = c.get("/editor-only")
+        assert resp.status_code == 403
+
+    def test_qa_user_fails_403(self, editor_app):
+        app, _ = editor_app
+        app.dependency_overrides[get_current_user] = lambda: {
+            "uid": "u1", "is_qa": True, "is_editor": False, "is_admin": False
+        }
+        with TestClient(app) as c:
+            resp = c.get("/editor-only")
+        assert resp.status_code == 403
+
+
+class TestGetQaUser:
+    """Test QA-only access via HTTP endpoints."""
+
+    @pytest.fixture
+    def qa_app(self, mock_db):
+        app = FastAPI()
+
+        async def override_db():
+            yield mock_db
+
+        app.dependency_overrides[get_db] = override_db
+
+        @app.get("/qa-only")
+        async def qa_endpoint(user: dict = Depends(get_qa_user)):
+            return {"uid": user["uid"]}
+
+        return app, mock_db
+
+    def test_qa_passes(self, qa_app):
+        app, _ = qa_app
+        app.dependency_overrides[get_current_user] = lambda: {
+            "uid": "u1", "is_qa": True, "is_admin": False
+        }
+        with TestClient(app) as c:
+            resp = c.get("/qa-only")
+        assert resp.status_code == 200
+
+    def test_admin_passes_as_qa(self, qa_app):
+        app, _ = qa_app
+        app.dependency_overrides[get_current_user] = lambda: {
+            "uid": "u1", "is_qa": False, "is_admin": True
+        }
+        with TestClient(app) as c:
+            resp = c.get("/qa-only")
+        assert resp.status_code == 200
+
+    def test_regular_user_fails_403(self, qa_app):
+        app, _ = qa_app
+        app.dependency_overrides[get_current_user] = lambda: {
+            "uid": "u1", "is_qa": False, "is_admin": False
+        }
+        with TestClient(app) as c:
+            resp = c.get("/qa-only")
+        assert resp.status_code == 403
+
+    def test_editor_user_fails_403(self, qa_app):
+        app, _ = qa_app
+        app.dependency_overrides[get_current_user] = lambda: {
+            "uid": "u1", "is_editor": True, "is_qa": False, "is_admin": False
+        }
+        with TestClient(app) as c:
+            resp = c.get("/qa-only")
+        assert resp.status_code == 403
+
+
+class TestGetReviewerUser:
+    """Test reviewer (editor OR qa OR admin) access via HTTP endpoints."""
+
+    @pytest.fixture
+    def reviewer_app(self, mock_db):
+        app = FastAPI()
+
+        async def override_db():
+            yield mock_db
+
+        app.dependency_overrides[get_db] = override_db
+
+        @app.get("/reviewer")
+        async def reviewer_endpoint(user: dict = Depends(get_reviewer_user)):
+            return {"uid": user["uid"]}
+
+        return app, mock_db
+
+    def test_editor_passes(self, reviewer_app):
+        app, _ = reviewer_app
+        app.dependency_overrides[get_current_user] = lambda: {
+            "uid": "u1", "is_editor": True, "is_qa": False, "is_admin": False
+        }
+        with TestClient(app) as c:
+            resp = c.get("/reviewer")
+        assert resp.status_code == 200
+
+    def test_qa_passes(self, reviewer_app):
+        app, _ = reviewer_app
+        app.dependency_overrides[get_current_user] = lambda: {
+            "uid": "u1", "is_editor": False, "is_qa": True, "is_admin": False
+        }
+        with TestClient(app) as c:
+            resp = c.get("/reviewer")
+        assert resp.status_code == 200
+
+    def test_admin_passes(self, reviewer_app):
+        app, _ = reviewer_app
+        app.dependency_overrides[get_current_user] = lambda: {
+            "uid": "u1", "is_editor": False, "is_qa": False, "is_admin": True
+        }
+        with TestClient(app) as c:
+            resp = c.get("/reviewer")
+        assert resp.status_code == 200
+
+    def test_editor_and_qa_passes(self, reviewer_app):
+        app, _ = reviewer_app
+        app.dependency_overrides[get_current_user] = lambda: {
+            "uid": "u1", "is_editor": True, "is_qa": True
+        }
+        with TestClient(app) as c:
+            resp = c.get("/reviewer")
+        assert resp.status_code == 200
+
+    def test_regular_user_fails_403(self, reviewer_app):
+        app, _ = reviewer_app
+        app.dependency_overrides[get_current_user] = lambda: {
+            "uid": "u1", "is_editor": False, "is_qa": False, "is_admin": False
+        }
+        with TestClient(app) as c:
+            resp = c.get("/reviewer")
+        assert resp.status_code == 403

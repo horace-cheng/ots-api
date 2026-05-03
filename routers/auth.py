@@ -124,8 +124,8 @@ async def get_admin_user(
 async def get_editor_user(
     current_user: dict = Depends(get_current_user),
 ) -> dict:
-    """Editor 端點用。確認 is_editor = true"""
-    if not current_user.get("is_editor"):
+    """Editor 端點用。確認 is_editor = true 或 is_admin = true"""
+    if not current_user.get("is_editor") and not current_user.get("is_admin"):
         raise HTTPException(status_code=403, detail="Editor access required")
 
     return current_user
@@ -134,8 +134,18 @@ async def get_editor_user(
 async def get_qa_user(
     current_user: dict = Depends(get_current_user),
 ) -> dict:
-    """QA 端點用。確認 is_qa = true"""
+    """QA 端點用。確認 is_qa = true 或 is_admin = true"""
     if not current_user.get("is_qa") and not current_user.get("is_admin"):
         raise HTTPException(status_code=403, detail="QA access required")
+
+    return current_user
+
+
+async def get_reviewer_user(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Editor 或 QA 共享端點用。任一角色即可進入"""
+    if not current_user.get("is_editor") and not current_user.get("is_qa") and not current_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Editor or QA access required")
 
     return current_user

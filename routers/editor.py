@@ -12,7 +12,7 @@ import logging
 
 from core.database import get_db
 from core import storage
-from routers.auth import get_editor_user, get_qa_user
+from routers.auth import get_editor_user, get_reviewer_user
 from models.schemas import (
     OrderDetail, OrderListResponse,
     QASegment, QASegmentListResponse, QASegmentsBatchUpdate,
@@ -26,7 +26,7 @@ router = APIRouter(prefix="/editor", tags=["editor"])
 
 @router.get("/orders", response_model=OrderListResponse)
 async def list_assigned_orders(
-    user:   dict       = Depends(get_qa_user),
+    user:   dict       = Depends(get_reviewer_user),
     db:     AsyncSession = Depends(get_db),
 ):
     """列出指派給當前使用者 (Editor 或 QA) 的待審閱訂單"""
@@ -74,10 +74,10 @@ async def list_assigned_orders(
 @router.get("/orders/{order_id}", response_model=OrderDetail)
 async def get_editor_order(
     order_id: str,
-    editor:   dict       = Depends(get_editor_user),
+    user:   dict       = Depends(get_reviewer_user),
     db:       AsyncSession = Depends(get_db),
 ):
-    """取得指派給該 Editor 的訂單詳情"""
+    """取得指派給該 Editor/QA 的訂單詳情"""
     result = await db.execute(text("""
         SELECT
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
@@ -90,8 +90,8 @@ async def get_editor_order(
         WHERE o.id = :id AND (o.editor_id = :user_id OR o.qa_id = :user_id OR :is_admin = true)
     """), {
         "id":        order_id,
-        "user_id":   editor["user_id"],
-        "is_admin":  editor.get("is_admin", False)
+        "user_id":   user["user_id"],
+        "is_admin":  user.get("is_admin", False)
     })
 
     row = result.fetchone()
@@ -104,7 +104,7 @@ async def get_editor_order(
 @router.get("/orders/{order_id}/segments", response_model=QASegmentListResponse)
 async def get_assigned_order_segments(
     order_id: str,
-    user:     dict       = Depends(get_qa_user),
+    user:     dict       = Depends(get_reviewer_user),
     db:       AsyncSession = Depends(get_db),
 ):
     """獲取指派訂單的段落資料 (Editor 或 QA 呼叫)"""
@@ -168,7 +168,7 @@ async def get_assigned_order_segments(
 async def update_assigned_order_segments(
     order_id: str,
     body:     QASegmentsBatchUpdate,
-    user:     dict       = Depends(get_qa_user),
+    user:     dict       = Depends(get_reviewer_user),
     db:       AsyncSession = Depends(get_db),
 ):
     """Editor 或 QA 儲存草稿"""
@@ -200,7 +200,7 @@ async def update_assigned_order_segments(
 @router.post("/orders/{order_id}/submit", response_model=MessageResponse)
 async def submit_review(
     order_id: str,
-    user:     dict       = Depends(get_qa_user),
+    user:     dict       = Depends(get_reviewer_user),
     db:       AsyncSession = Depends(get_db),
 ):
     """完成審閱。QA 提交後變為 editor_verify，Editor 提交後變為 delivered"""
