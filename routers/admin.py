@@ -384,7 +384,7 @@ async def admin_get_order(
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
             o.word_count, o.price_ntd, o.title, o.notes,
             o.created_at, o.deadline_at, o.delivered_at,
-            o.gcs_output_path, o.editor_id,
+            o.gcs_output_path, o.editor_id, o.qa_id,
             p.payment_status, p.invoice_no,
             pj.qa_result
         FROM orders o

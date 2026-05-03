@@ -158,7 +158,7 @@ class TestListQAFlags:
 
 
 class TestAdminGetOrder:
-    def _order_row(self, qa_result=None, gcs_output_path=None):
+    def _order_row(self, qa_result=None, gcs_output_path=None, editor_id=None, qa_id=None):
         from datetime import datetime, timezone
         row = MagicMock()
         row._mapping = {
@@ -175,6 +175,8 @@ class TestAdminGetOrder:
             "deadline_at":     None,
             "delivered_at":    None,
             "gcs_output_path": gcs_output_path,
+            "editor_id":       editor_id,
+            "qa_id":           qa_id,
             "payment_status":  "paid",
             "invoice_no":      None,
             "qa_result":       qa_result,
@@ -212,6 +214,27 @@ class TestAdminGetOrder:
         resp = admin_client.get("/admin/orders/order-001")
         assert resp.status_code == 200
         assert resp.json()["qa_result"] is None
+
+    def test_includes_qa_id(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._order_row(qa_id="qa-user-123")
+
+        resp = admin_client.get("/admin/orders/order-001")
+        assert resp.status_code == 200
+        assert resp.json()["qa_id"] == "qa-user-123"
+
+    def test_qa_id_none_when_not_assigned(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._order_row(qa_id=None)
+
+        resp = admin_client.get("/admin/orders/order-001")
+        assert resp.status_code == 200
+        assert resp.json()["qa_id"] is None
+
+    def test_includes_editor_id(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._order_row(editor_id="editor-user-456")
+
+        resp = admin_client.get("/admin/orders/order-001")
+        assert resp.status_code == 200
+        assert resp.json()["editor_id"] == "editor-user-456"
 
 
 class TestAdminGetDownloadUrl:
