@@ -28,13 +28,15 @@ router = APIRouter(prefix="/editor", tags=["editor"])
 async def list_assigned_orders(
     user:   dict       = Depends(get_reviewer_user),
     db:     AsyncSession = Depends(get_db),
+    limit:  int = 10,
+    offset: int = 0,
 ):
     """列出指派給當前使用者 (Editor 或 QA) 的待審閱訂單"""
     # 如果是 admin，看到所有待審閱
     # 如果是 editor，看到 editor_id = me
     # 如果是 qa，看到 qa_id = me
     conditions = []
-    params = {"user_id": user["user_id"]}
+    params = {"user_id": user["user_id"], "limit": limit, "offset": offset}
 
     if user.get("is_admin"):
         conditions.append("o.status IN ('qa_review', 'editor_verify')")
@@ -44,14 +46,24 @@ async def list_assigned_orders(
             role_conds.append("o.editor_id = :user_id")
         if user.get("is_qa"):
             role_conds.append("o.qa_id = :user_id")
+            # QA 只能看到 qa_review 狀態的訂單，不能看到 editor_verify
+            conditions.append("o.status = 'qa_review'")
         
         if not role_conds:
              raise HTTPException(status_code=403, detail="No assigned roles found")
         
         conditions.append(f"({ ' OR '.join(role_conds) })")
-        conditions.append("o.status IN ('qa_review', 'editor_verify')")
+        # Editor 可以看到 qa_review 和 editor_verify
+        if user.get("is_editor"):
+            conditions.append("o.status IN ('qa_review', 'editor_verify')")
 
     where = " AND ".join(conditions)
+
+    # Get total count
+    count_result = await db.execute(text(f"""
+        SELECT COUNT(*) FROM orders o WHERE {where}
+    """), params)
+    total = count_result.scalar() or 0
 
     result = await db.execute(text(f"""
         SELECT
@@ -64,11 +76,12 @@ async def list_assigned_orders(
         LEFT JOIN payments p ON p.order_id = o.id
         WHERE {where}
         ORDER BY o.created_at DESC
+        LIMIT :limit OFFSET :offset
     """), params)
 
     rows = result.fetchall()
     orders = [OrderDetail(**dict(r._mapping)) for r in rows]
-    return OrderListResponse(orders=orders, total=len(orders))
+    return OrderListResponse(orders=orders, total=total)
 
 
 @router.get("/orders/{order_id}", response_model=OrderDetail)

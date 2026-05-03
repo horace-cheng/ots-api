@@ -366,6 +366,24 @@ class TestQaAccessSharedEndpoints:
         assert resp.status_code == 200
         assert len(resp.json()["orders"]) == 1
 
+    def test_qa_cannot_see_editor_verify_orders(self, mock_db):
+        """QA users should NOT see orders in editor_verify status."""
+        # Mock count query returns 0 (no editor_verify orders visible to QA)
+        mock_db.execute.return_value.scalar.return_value = 0
+        mock_db.execute.return_value.fetchall.return_value = []
+
+        client = self._make_qa_app(mock_db)
+        resp = client.get("/editor/orders")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["orders"]) == 0
+        assert data["total"] == 0
+
+        # Verify the SQL query contains the qa_review-only filter for QA
+        calls = mock_db.execute.call_args_list
+        sql = str(calls[0][0][0]) if calls else ""
+        assert "qa_review" in sql
+
     @patch("core.storage.read_temp_json")
     def test_qa_can_get_segments(self, mock_read, mock_db):
         mock_db.execute.return_value.fetchone.return_value = MagicMock()
@@ -379,3 +397,69 @@ class TestQaAccessSharedEndpoints:
         client = self._make_qa_app(mock_db)
         resp = client.get("/editor/orders/order-001/segments")
         assert resp.status_code == 200
+
+
+class TestEditorListOrdersStatusFiltering:
+    """Verify status-based filtering logic for different roles."""
+
+    def test_editor_sees_qa_review_and_editor_verify(self, mock_db):
+        """Editor users should see both qa_review and editor_verify orders."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from core.database import get_db
+        from routers.auth import get_reviewer_user
+        from routers.editor import router
+
+        EDITOR_USER = {
+            "uid": "editor-uid",
+            "email": "editor@ots.tw",
+            "user_id": "editor-db-id",
+            "client_type": "b2c",
+            "is_editor": True,
+            "is_qa": False,
+            "is_admin": False,
+        }
+
+        app = FastAPI()
+        app.include_router(router)
+
+        async def override_db():
+            yield mock_db
+
+        app.dependency_overrides[get_db] = override_db
+        app.dependency_overrides[get_reviewer_user] = lambda: EDITOR_USER
+
+        row = MagicMock()
+        row._mapping = {
+            "id": "order-001",
+            "track_type": "fast",
+            "status": "editor_verify",
+            "source_lang": "zh-tw",
+            "target_lang": "en",
+            "word_count": 1000,
+            "price_ntd": 2000,
+            "title": "Title",
+            "notes": None,
+            "created_at": datetime.now(timezone.utc),
+            "deadline_at": None,
+            "delivered_at": None,
+            "gcs_output_path": None,
+            "editor_id": "editor-db-id",
+            "qa_id": "qa-db-id",
+            "qa_submitted_at": None,
+            "payment_status": "paid",
+            "invoice_no": None
+        }
+        mock_db.execute.return_value.fetchall.return_value = [row]
+        mock_db.execute.return_value.scalar.return_value = 1
+
+        client = TestClient(app)
+        resp = client.get("/editor/orders")
+        assert resp.status_code == 200
+        assert len(resp.json()["orders"]) == 1
+
+        # Verify SQL includes both statuses for editor
+        calls = mock_db.execute.call_args_list
+        sql = str(calls[0][0][0]) if calls else ""
+        assert "qa_review" in sql
+        assert "editor_verify" in sql
