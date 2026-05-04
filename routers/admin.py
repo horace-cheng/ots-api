@@ -740,7 +740,7 @@ async def retrigger_pipeline(
 
     await db.execute(text("""
         DELETE FROM qa_flags
-        WHERE order_id = (SELECT id FROM pipeline_jobs WHERE order_id = :id AND job_type = 'qa_auto')
+        WHERE job_id IN (SELECT id FROM pipeline_jobs WHERE order_id = :id AND job_type = 'qa_auto')
     """), {"id": order_id})
 
     await db.execute(text("""
