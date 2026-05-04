@@ -693,3 +693,28 @@ class TestAdminOrderStatus:
             )
             assert resp.status_code == 200
             assert status in resp.json()["message"]
+
+
+class TestAdminRetranslate:
+    def test_order_not_found_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+
+        with patch("routers.admin.trigger_pipeline", new_callable=AsyncMock):
+            resp = admin_client.post("/admin/orders/nonexistent/retranslate")
+
+        assert resp.status_code == 404
+
+    def test_success_resets_status_and_triggers_pipeline(self, admin_client, mock_db):
+        row = MagicMock()
+        row.id = "order-001"
+        row.status = "qa_review"
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        with patch("routers.admin.trigger_pipeline", new_callable=AsyncMock) as mock_trigger:
+            mock_trigger.return_value = "msg-123"
+            resp = admin_client.post("/admin/orders/order-001/retranslate")
+
+        assert resp.status_code == 200
+        assert "re-triggered" in resp.json()["message"]
+        mock_db.commit.assert_awaited()
+        mock_trigger.assert_awaited_once_with("order-001")

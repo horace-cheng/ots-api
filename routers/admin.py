@@ -723,6 +723,32 @@ async def update_order_status(
     return MessageResponse(message=f"Order status updated to {status}")
 
 
+@router.post("/orders/{order_id}/retranslate", response_model=MessageResponse)
+async def retrigger_pipeline(
+    order_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """
+    重新觸發翻譯 Pipeline。
+    用於訂單翻譯失敗、QA 不通過需重新翻譯等情況。
+    """
+    result = await db.execute(text("SELECT id, status FROM orders WHERE id = :id"), {"id": order_id})
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    await db.execute(text("""
+        UPDATE orders SET status = 'processing' WHERE id = :id
+    """), {"id": order_id})
+    await db.commit()
+
+    await trigger_pipeline(order_id)
+
+    logger.info(f"Pipeline re-triggered by admin: order={order_id}")
+    return MessageResponse(message=f"Pipeline re-triggered for order {order_id}")
+
+
 @router.put("/users/{user_id}/languages", response_model=MessageResponse)
 async def update_user_languages(
     user_id: str,
