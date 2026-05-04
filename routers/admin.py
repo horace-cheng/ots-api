@@ -739,6 +739,11 @@ async def retrigger_pipeline(
         raise HTTPException(status_code=404, detail="Order not found")
 
     await db.execute(text("""
+        DELETE FROM qa_flags
+        WHERE order_id = (SELECT id FROM pipeline_jobs WHERE order_id = :id AND job_type = 'qa_auto')
+    """), {"id": order_id})
+
+    await db.execute(text("""
         UPDATE orders SET status = 'processing' WHERE id = :id
     """), {"id": order_id})
     await db.commit()
