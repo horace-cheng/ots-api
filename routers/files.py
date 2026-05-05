@@ -32,39 +32,7 @@ _LANG_ZH = {
 }
 
 
-def _extract_title(gcs_path: str) -> str | None:
-    """Read the first 600 bytes of an uploaded file and return the opening words as a title."""
-    try:
-        filename = gcs_path.rsplit("/", 1)[-1].lower()
-        ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
-        if ext not in ("txt", "html", "htm"):
-            return None
-
-        client = get_storage_client()
-        blob   = client.bucket(settings.gcs_uploads_bucket).blob(gcs_path)
-        data   = blob.download_as_bytes(start=0, end=600)
-        text   = data.decode("utf-8", errors="ignore")
-
-        if ext in ("html", "htm"):
-            text = re.sub(r"<[^>]+>", " ", text)
-
-        words = text.split()
-        if not words:
-            return None
-        return " ".join(words[:10])[:50]
-    except Exception as e:
-        logger.warning(f"Title extraction failed for {gcs_path}: {e}")
-        return None
-
-ALLOWED_CONTENT_TYPES = {
-    "text/plain",
-    "text/html",
-    "application/pdf",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-}
-
-_LANG_ZH = {
+LANG_ZH = {
     "tai-lo":     "台語",
     "hakka":      "客語",
     "indigenous": "原住民族語",
@@ -74,22 +42,26 @@ _LANG_ZH = {
     "ko":         "한국어",
 }
 
+ALLOWED_CONTENT_TYPES = {
+    "text/plain",
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
 
 def _extract_title(gcs_path: str) -> str | None:
     """Read the first 600 bytes of an uploaded file and return the opening words as a title."""
     try:
         filename = gcs_path.rsplit("/", 1)[-1].lower()
         ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
-        if ext not in ("txt", "html", "htm"):
+        if ext != "txt":
             return None
 
         client = get_storage_client()
         blob   = client.bucket(settings.gcs_uploads_bucket).blob(gcs_path)
         data   = blob.download_as_bytes(start=0, end=600)
         text_  = data.decode("utf-8", errors="ignore")
-
-        if ext in ("html", "htm"):
-            text_ = re.sub(r"<[^>]+>", " ", text_)
 
         words = text_.split()
         if not words:
@@ -182,8 +154,8 @@ async def confirm_upload(
         title = _extract_title(gcs_path)
         if not title:
             # Fallback for binary files (docx, pdf)
-            src   = _LANG_ZH.get(row.source_lang, row.source_lang)
-            tgt   = _LANG_ZH.get(row.target_lang, row.target_lang)
+            src   = LANG_ZH.get(row.source_lang, row.source_lang)
+            tgt   = LANG_ZH.get(row.target_lang, row.target_lang)
             track = "快速翻譯" if row.track_type == "fast" else "文學翻譯"
             title = f"{src} → {tgt} {track}"
         await db.execute(
