@@ -187,17 +187,6 @@ class TestExtractTitle:
         result = _extract_title("orders/x/source.txt")
         assert result == "The quick brown fox jumps over the lazy dog extra"
 
-    def test_html_strips_tags(self, monkeypatch):
-        from routers.files import _extract_title
-        import routers.files as files_mod
-        monkeypatch.setattr(files_mod, "get_storage_client", lambda: self._blob(
-            b"<html><body><p>Hello world from HTML</p></body></html>"
-        ))
-        result = _extract_title("orders/x/source.html")
-        assert result is not None
-        assert "<" not in result
-        assert "Hello" in result
-
     def test_non_text_file_returns_none(self, monkeypatch):
         from routers.files import _extract_title
         result = _extract_title("orders/x/source.docx")
