@@ -113,3 +113,16 @@ def write_temp_json(order_id: str, filename: str, data: dict | list):
         json.dumps(data, ensure_ascii=False, indent=2),
         content_type="application/json",
     )
+
+
+def read_upload_raw(order_id: str) -> tuple[bytes, str]:
+    """從 uploads bucket 讀取原始檔案。回傳 (raw_bytes, filename)。"""
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_uploads_bucket)
+    prefix = f"orders/{order_id}/"
+    blobs = list(bucket.list_blobs(prefix=prefix))
+    if not blobs:
+        raise FileNotFoundError(f"No upload file found for order {order_id}")
+    # 取第一個（通常只有一個檔案）
+    blob = blobs[0]
+    return blob.download_as_bytes(), blob.name.split("/")[-1]

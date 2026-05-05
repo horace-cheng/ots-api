@@ -124,6 +124,7 @@ class OrderDetail(BaseModel):
     payment_status:  Optional[str]
     invoice_no:      Optional[str]
     gcs_output_path: Optional[str]
+    gcs_upload_path: Optional[str] = None
     editor_id:       Optional[UUIDStr] = None
     qa_id:           Optional[UUIDStr] = None
     qa_submitted_at: Optional[datetime] = None
@@ -150,6 +151,11 @@ class UploadUrlResponse(BaseModel):
 class DownloadUrlResponse(BaseModel):
     signed_url: str
     expires_in: int = 3600
+
+class OriginalContentResponse(BaseModel):
+    filename: str
+    content_type: str
+    text: str
 
 
 # ── Pipeline Job ──────────────────────────────────────────────────────────────
