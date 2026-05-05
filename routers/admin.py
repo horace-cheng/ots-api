@@ -477,7 +477,7 @@ async def admin_get_original_content(
         return OriginalContentResponse(filename=filename, content_type=f"text/{ext}", text=text)
 
     elif ext == "docx":
-        import zipfile, io
+        import zipfile
         from xml.etree import ElementTree
         try:
             with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
