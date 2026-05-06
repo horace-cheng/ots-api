@@ -4,6 +4,7 @@ routers/files.py
 檔案上傳 / 下載 Signed URL 端點。
 """
 
+from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -11,7 +12,7 @@ import logging
 import re
 
 from core.database import get_db
-from core.storage import generate_upload_signed_url, generate_download_signed_url, get_storage_client
+from core.storage import generate_upload_signed_url, generate_download_signed_url, get_storage_client, _get_signing_credentials
 from core.config import settings
 from routers.auth import get_current_user
 from models.schemas import (
