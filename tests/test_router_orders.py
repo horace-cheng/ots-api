@@ -159,7 +159,8 @@ class TestCancelOrder:
         mock_db.execute.return_value.fetchone.return_value = row
 
         resp = orders_client.delete("/orders/order-001")
-        assert resp.status_code == 400
+        assert resp.status_code == 200  # LT orders CAN be cancelled while quoted (before payment)
+        assert resp.json()["message"] == "Order cancelled"
 
     def test_order_not_found_404(self, orders_client, mock_db):
         mock_db.execute.return_value.fetchone.return_value = None

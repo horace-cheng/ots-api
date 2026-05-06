@@ -1039,6 +1039,39 @@ async def update_order_status(
     return MessageResponse(message=f"Order status updated to {status}")
 
 
+@router.delete("/orders/{order_id}", response_model=MessageResponse)
+async def admin_cancel_order(
+    order_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """
+    Admin cancels an order.
+    Only allowed before payment (pending_payment / awaiting_quote / quoted).
+    """
+    result = await db.execute(text("""
+        SELECT status FROM orders WHERE id = :id
+    """), {"id": order_id})
+
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if row.status not in ("pending_payment", "awaiting_quote", "quoted"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel order with status '{row.status}'"
+        )
+
+    await db.execute(text("""
+        UPDATE orders SET status = 'cancelled' WHERE id = :id
+    """), {"id": order_id})
+    await db.commit()
+
+    logger.info(f"Order cancelled by admin: {order_id}")
+    return MessageResponse(message="Order cancelled")
+
+
 @router.post("/orders/{order_id}/retranslate", response_model=MessageResponse)
 async def retrigger_pipeline(
     order_id: str,

@@ -244,7 +244,7 @@ async def cancel_order(
 ):
     """
     取消訂單。
-    只有 pending_payment 狀態可以取消。
+    所有未付款狀態（pending_payment / awaiting_quote / quoted）均可取消。
     """
     result = await db.execute(text("""
         SELECT o.id, o.status FROM orders o
@@ -255,7 +255,7 @@ async def cancel_order(
     row = result.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Order not found")
-    if row.status not in ("pending_payment", "awaiting_quote"):
+    if row.status not in ("pending_payment", "awaiting_quote", "quoted"):
         raise HTTPException(
             status_code=400,
             detail=f"Cannot cancel order with status '{row.status}'"
