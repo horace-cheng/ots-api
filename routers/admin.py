@@ -172,14 +172,14 @@ async def set_order_quote(
             price_ntd     = :price,
             status        = 'quoted'
         WHERE id = :order_id
-    """), {"price": body.price, "now": now, "order_id": order_id})
+    """), {"price": body.quoted_price, "now": now, "order_id": order_id})
 
     # 若付款記錄已存在（首次報價），更新金額
     await db.execute(text("""
         UPDATE payments
         SET amount_ntd = :price
         WHERE order_id = :order_id AND payment_status = 'pending'
-    """), {"price": body.price, "order_id": order_id})
+    """), {"price": body.quoted_price, "order_id": order_id})
 
     # 若付款記錄不存在（首次報價），建立付款記錄
     result = await db.execute(text("""
@@ -189,13 +189,13 @@ async def set_order_quote(
         await db.execute(text("""
             INSERT INTO payments (order_id, amount_ntd, payment_status)
             VALUES (:order_id, :amount, 'pending')
-        """), {"order_id": order_id, "amount": body.price})
+        """), {"order_id": order_id, "amount": body.quoted_price})
 
     await db.commit()
 
     # TODO: send email notification to user
-    logger.info(f"Quote set: order={order_id}, price={body.price}")
-    return MessageResponse(message=f"Quote set: NT${body.price}")
+    logger.info(f"Quote set: order={order_id}, price={body.quoted_price}")
+    return MessageResponse(message=f"Quote set: NT${body.quoted_price}")
 
 
 # ── 手動付款確認（ManualPaymentGateway 用）───────────────────────────────────

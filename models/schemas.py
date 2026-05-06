@@ -214,7 +214,8 @@ class PaymentConfirm(BaseModel):
 
 # ── Admin: Literary Track 指派 ────────────────────────────────────────────────
 class QuoteUpdate(BaseModel):
-    price: int = Field(..., gt=0, description="報價金額（NTD）")
+    quoted_price: int = Field(..., gt=0, description="報價金額（NTD）")
+    admin_notes: Optional[str] = Field(None, description="報價備注")
 
 class AssignmentUpdate(BaseModel):
     editor_id:       Optional[str] = None

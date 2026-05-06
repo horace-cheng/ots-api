@@ -684,7 +684,7 @@ class TestSetOrderQuote:
 
         resp = admin_client.post(
             "/admin/orders/order-001/quote",
-            json={"price": 30000}
+            json={"quoted_price": 30000}
         )
         assert resp.status_code == 200
         assert "Quote set" in resp.json()["message"]
@@ -700,7 +700,7 @@ class TestSetOrderQuote:
 
         resp = admin_client.post(
             "/admin/orders/order-001/quote",
-            json={"price": 35000}
+            json={"quoted_price": 35000}
         )
         assert resp.status_code == 200
         mock_db.commit.assert_awaited()
@@ -715,7 +715,7 @@ class TestSetOrderQuote:
 
         resp = admin_client.post(
             "/admin/orders/order-001/quote",
-            json={"price": 3000}
+            json={"quoted_price": 3000}
         )
         assert resp.status_code == 400
         assert "Quote only applies" in resp.json()["detail"]
@@ -730,7 +730,7 @@ class TestSetOrderQuote:
 
         resp = admin_client.post(
             "/admin/orders/order-001/quote",
-            json={"price": 35000}
+            json={"quoted_price": 35000}
         )
         assert resp.status_code == 400
         assert "Cannot set quote" in resp.json()["detail"]
@@ -740,7 +740,7 @@ class TestSetOrderQuote:
 
         resp = admin_client.post(
             "/admin/orders/nonexistent/quote",
-            json={"price": 3000}
+            json={"quoted_price": 3000}
         )
         assert resp.status_code == 404
 
