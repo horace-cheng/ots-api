@@ -143,3 +143,25 @@ async def get_qa_flags_internal(
 
     total = count_result.scalar()
     return {"total": total, "order_id": order_id, "flag_level": flag_level}
+
+
+# ── GET /internal/assignments/{order_id} ──────────────────────────────────────
+@router.get("/assignments/{order_id}")
+async def get_assignment_internal(
+    order_id:  str,
+    caller:    dict       = Depends(verify_oidc_token),
+    db:        AsyncSession = Depends(get_db),
+):
+    """
+    Workflow 用來輪詢 Literary Track 的編輯/校對狀態。
+    使用 OIDC 驗證（Google SA），而非 Firebase token。
+    """
+    result = await db.execute(text("""
+        SELECT status FROM literary_assignments WHERE order_id = :order_id
+    """), {"order_id": order_id})
+
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    return {"order_id": order_id, "status": row.status}
