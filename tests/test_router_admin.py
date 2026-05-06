@@ -673,6 +673,487 @@ class TestMarkDelivered:
         assert "already delivered" in resp.json()["detail"].lower()
 
 
+class TestSetOrderQuote:
+    def test_quote_lt_order_awaiting_quote(self, admin_client, mock_db):
+        row = MagicMock()
+        row.id = "order-001"
+        row.status = "awaiting_quote"
+        row.track_type = "literary"
+        row.price_ntd = 0
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        resp = admin_client.post(
+            "/admin/orders/order-001/quote",
+            json={"price": 30000}
+        )
+        assert resp.status_code == 200
+        assert "Quote set" in resp.json()["message"]
+        mock_db.commit.assert_awaited()
+
+    def test_quote_lt_order_already_quoted(self, admin_client, mock_db):
+        row = MagicMock()
+        row.id = "order-001"
+        row.status = "quoted"
+        row.track_type = "literary"
+        row.price_ntd = 25000
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        resp = admin_client.post(
+            "/admin/orders/order-001/quote",
+            json={"price": 35000}
+        )
+        assert resp.status_code == 200
+        mock_db.commit.assert_awaited()
+
+    def test_quote_fast_track_returns_400(self, admin_client, mock_db):
+        row = MagicMock()
+        row.id = "order-001"
+        row.status = "pending_payment"
+        row.track_type = "fast"
+        row.price_ntd = 2000
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        resp = admin_client.post(
+            "/admin/orders/order-001/quote",
+            json={"price": 3000}
+        )
+        assert resp.status_code == 400
+        assert "Quote only applies" in resp.json()["detail"]
+
+    def test_quote_wrong_status_returns_400(self, admin_client, mock_db):
+        row = MagicMock()
+        row.id = "order-001"
+        row.status = "processing"
+        row.track_type = "literary"
+        row.price_ntd = 30000
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        resp = admin_client.post(
+            "/admin/orders/order-001/quote",
+            json={"price": 35000}
+        )
+        assert resp.status_code == 400
+        assert "Cannot set quote" in resp.json()["detail"]
+
+    def test_quote_order_not_found_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+
+        resp = admin_client.post(
+            "/admin/orders/nonexistent/quote",
+            json={"price": 3000}
+        )
+        assert resp.status_code == 404
+
+
+class TestAssignLiteraryRole:
+    def _user_row(self, user_id="editor-001", is_editor=True):
+        row = MagicMock()
+        row.id = user_id
+        row.is_editor = is_editor
+        return row
+
+    def _assign_row(self, status="pending"):
+        from datetime import datetime, timezone
+        row = MagicMock()
+        row.id = "assign-001"
+        row.order_id = "order-001"
+        row.editor_id = None
+        row.proofreader_id = None
+        row.status = status
+        row.assigned_at = datetime.now(timezone.utc)
+        row.editor_submitted_at = None
+        row.proofread_submitted_at = None
+        row._mapping = {
+            "id": "assign-001",
+            "order_id": "order-001",
+            "editor_id": None,
+            "proofreader_id": None,
+            "status": status,
+            "assigned_at": datetime.now(timezone.utc),
+            "editor_submitted_at": None,
+            "proofread_submitted_at": None,
+        }
+        return row
+
+    def _make_execute_handler(self, results_by_keyword):
+        """Create a callable that returns different results based on SQL content.
+        Note: get_admin_user is overridden in admin_client, so no admin_users query.
+        """
+        def handler(*args, **kwargs):
+            sql = str(args[0]).lower() if args else ''
+            for keyword, result in results_by_keyword.items():
+                if keyword in sql:
+                    return result
+            r = MagicMock()
+            r.fetchone.return_value = None
+            return r
+        return handler
+
+    def test_assign_editor_by_user_id(self, admin_client, mock_db):
+        user_res = MagicMock()
+        user_res.fetchone.return_value = self._user_row("editor-001", is_editor=True)
+        assign_res = MagicMock()
+        assign_res.fetchone.return_value = self._assign_row("pending")
+        result_res = MagicMock()
+        result_res.fetchone.return_value = self._assign_row("editing")
+
+        mock_db.execute.side_effect = self._make_execute_handler({
+            "select id, is_editor": user_res,
+            "select status from literary_assignments": assign_res,
+            "select id, order_id, editor_id, proofreader_id": result_res,
+        })
+
+        resp = admin_client.post(
+            "/admin/assignments/order-001",
+            json={"role": "editor", "user_id": "editor-001"}
+        )
+        assert resp.status_code == 200, resp.json()
+        data = resp.json()
+        assert data["status"] == "editing"
+
+    def test_assign_editor_not_an_editor_returns_400(self, admin_client, mock_db):
+        user_res = MagicMock()
+        user_res.fetchone.return_value = self._user_row("qa-001", is_editor=False)
+
+        mock_db.execute.side_effect = self._make_execute_handler({
+            "select id, is_editor": user_res,
+        })
+
+        resp = admin_client.post(
+            "/admin/assignments/order-001",
+            json={"role": "editor", "user_id": "qa-001"}
+        )
+        assert resp.status_code == 400
+        assert "does not have editor role" in resp.json()["detail"].lower()
+
+    def test_assign_editor_wrong_status_returns_400(self, admin_client, mock_db):
+        user_res = MagicMock()
+        user_res.fetchone.return_value = self._user_row("editor-001", is_editor=True)
+        assign_res = MagicMock()
+        assign_res.fetchone.return_value = self._assign_row("editor_done")
+
+        mock_db.execute.side_effect = self._make_execute_handler({
+            "select id, is_editor": user_res,
+            "select status from literary_assignments": assign_res,
+        })
+
+        resp = admin_client.post(
+            "/admin/assignments/order-001",
+            json={"role": "editor", "user_id": "editor-001"}
+        )
+        assert resp.status_code == 400
+        assert "Cannot assign editor" in resp.json()["detail"]
+
+    def test_assign_proofreader_by_email(self, admin_client, mock_db):
+        user_res = MagicMock()
+        user_res.fetchone.return_value = self._user_row("proof-001", is_editor=True)
+        assign_res = MagicMock()
+        assign_res.fetchone.return_value = self._assign_row("editor_done")
+        result_res = MagicMock()
+        result_res.fetchone.return_value = self._assign_row("proofreading")
+
+        mock_db.execute.side_effect = self._make_execute_handler({
+            "select id, is_editor": user_res,
+            "select status from literary_assignments": assign_res,
+            "select id, order_id, editor_id, proofreader_id": result_res,
+        })
+
+        resp = admin_client.post(
+            "/admin/assignments/order-001",
+            json={"role": "proofreader", "email": "proof@ots.tw"}
+        )
+        assert resp.status_code == 200, resp.json()
+        data = resp.json()
+        assert data["status"] == "proofreading"
+
+    def test_assign_proofreader_wrong_status_returns_400(self, admin_client, mock_db):
+        user_res = MagicMock()
+        user_res.fetchone.return_value = self._user_row("proof-001", is_editor=True)
+        assign_res = MagicMock()
+        assign_res.fetchone.return_value = self._assign_row("editing")
+
+        mock_db.execute.side_effect = self._make_execute_handler({
+            "select id, is_editor": user_res,
+            "select status from literary_assignments": assign_res,
+        })
+
+        resp = admin_client.post(
+            "/admin/assignments/order-001",
+            json={"role": "proofreader", "user_id": "proof-001"}
+        )
+        assert resp.status_code == 400
+        assert "Cannot assign proofreader" in resp.json()["detail"]
+
+    def test_assign_missing_role_returns_400(self, admin_client, mock_db):
+        mock_db.execute.side_effect = self._make_execute_handler({})
+
+    def test_assign_missing_user_id_and_email_returns_400(self, admin_client, mock_db):
+        mock_db.execute.side_effect = self._make_execute_handler({})
+
+        resp = admin_client.post(
+            "/admin/assignments/order-001",
+            json={"role": "translator", "user_id": "x"}
+        )
+        assert resp.status_code == 400
+
+    def test_assign_missing_user_id_and_email_returns_400(self, admin_client, mock_db):
+        admin_res = MagicMock()
+        admin_res.fetchone.return_value = MagicMock(id="admin-id", role="admin", active=True)
+        mock_db.execute.side_effect = self._make_execute_handler({
+            "admin_users": admin_res,
+        })
+
+        resp = admin_client.post(
+            "/admin/assignments/order-001",
+            json={"role": "editor"}
+        )
+        assert resp.status_code == 400
+
+    def test_assign_user_not_found_returns_404(self, admin_client, mock_db):
+        user_res = MagicMock()
+        user_res.fetchone.return_value = None
+
+        mock_db.execute.side_effect = self._make_execute_handler({
+            "select id, is_editor": user_res,
+        })
+
+        resp = admin_client.post(
+            "/admin/assignments/order-001",
+            json={"role": "editor", "user_id": "nonexistent"}
+        )
+        assert resp.status_code == 404
+
+    def test_complete_editor(self, admin_client, mock_db):
+        admin_res = MagicMock()
+        admin_res.fetchone.return_value = MagicMock(id="admin-id", role="admin", active=True)
+        assign_res = MagicMock()
+        assign_res.fetchone.return_value = self._assign_row("editing")
+        result_res = MagicMock()
+        result_res.fetchone.return_value = self._assign_row("editor_done")
+
+        mock_db.execute.side_effect = self._make_execute_handler({
+            "admin_users": admin_res,
+            "select id, status, editor_id, proofreader_id": assign_res,
+            "select id, order_id, editor_id, proofreader_id": result_res,
+        })
+
+        resp = admin_client.post(
+            "/admin/assignments/order-001/complete",
+            json={"role": "editor"}
+        )
+        assert resp.status_code == 200, resp.json()
+        data = resp.json()
+        assert data["status"] == "editor_done"
+
+    def test_complete_proofreader(self, admin_client, mock_db):
+        admin_res = MagicMock()
+        admin_res.fetchone.return_value = MagicMock(id="admin-id", role="admin", active=True)
+        assign_res = MagicMock()
+        assign_res.fetchone.return_value = self._assign_row("proofreading")
+        result_res = MagicMock()
+        result_res.fetchone.return_value = self._assign_row("proofread_done")
+
+        mock_db.execute.side_effect = self._make_execute_handler({
+            "admin_users": admin_res,
+            "select id, status, editor_id, proofreader_id": assign_res,
+            "select id, order_id, editor_id, proofreader_id": result_res,
+        })
+
+        resp = admin_client.post(
+            "/admin/assignments/order-001/complete",
+            json={"role": "proofreader"}
+        )
+        assert resp.status_code == 200, resp.json()
+        data = resp.json()
+        assert data["status"] == "proofread_done"
+
+    def test_complete_editor_wrong_status_returns_400(self, admin_client, mock_db):
+        admin_res = MagicMock()
+        admin_res.fetchone.return_value = MagicMock(id="admin-id", role="admin", active=True)
+        assign_res = MagicMock()
+        assign_res.fetchone.return_value = self._assign_row("pending")
+
+        mock_db.execute.side_effect = self._make_execute_handler({
+            "admin_users": admin_res,
+            "select id, status, editor_id, proofreader_id": assign_res,
+        })
+
+        resp = admin_client.post(
+            "/admin/assignments/order-001/complete",
+            json={"role": "editor"}
+        )
+        assert resp.status_code == 400
+        assert "Editor can only complete" in resp.json()["detail"]
+
+    def test_complete_proofreader_wrong_status_returns_400(self, admin_client, mock_db):
+        admin_res = MagicMock()
+        admin_res.fetchone.return_value = MagicMock(id="admin-id", role="admin", active=True)
+        assign_res = MagicMock()
+        assign_res.fetchone.return_value = self._assign_row("editing")
+
+        mock_db.execute.side_effect = self._make_execute_handler({
+            "admin_users": admin_res,
+            "select id, status, editor_id, proofreader_id": assign_res,
+        })
+
+        resp = admin_client.post(
+            "/admin/assignments/order-001/complete",
+            json={"role": "proofreader"}
+        )
+        assert resp.status_code == 400
+        assert "Proofreader can only complete" in resp.json()["detail"]
+
+    def test_complete_assignment_not_found_returns_404(self, admin_client, mock_db):
+        admin_res = MagicMock()
+        admin_res.fetchone.return_value = MagicMock(id="admin-id", role="admin", active=True)
+        assign_res = MagicMock()
+        assign_res.fetchone.return_value = None
+
+        mock_db.execute.side_effect = self._make_execute_handler({
+            "admin_users": admin_res,
+            "select id, status, editor_id, proofreader_id": assign_res,
+        })
+
+        resp = admin_client.post(
+            "/admin/assignments/nonexistent/complete",
+            json={"role": "editor"}
+        )
+        assert resp.status_code == 404
+
+
+class TestCompleteAssignment:
+    def _assign_row(self, status="editing"):
+        from datetime import datetime, timezone
+        row = MagicMock()
+        row.id = "assign-001"
+        row.order_id = "order-001"
+        row.editor_id = "editor-001"
+        row.proofreader_id = None
+        row.status = status
+        row.assigned_at = datetime.now(timezone.utc)
+        row.editor_submitted_at = None
+        row.proofread_submitted_at = None
+        row._mapping = {
+            "id": "assign-001",
+            "order_id": "order-001",
+            "editor_id": "editor-001",
+            "proofreader_id": None,
+            "status": status,
+            "assigned_at": datetime.now(timezone.utc),
+            "editor_submitted_at": None,
+            "proofread_submitted_at": None,
+        }
+        return row
+
+    def test_complete_editor(self, admin_client, mock_db):
+        assign_res = MagicMock()
+        assign_res.fetchone.return_value = self._assign_row("editing")
+        update_res = MagicMock()
+        result_res = MagicMock()
+        result_res.fetchone.return_value = self._assign_row("editor_done")
+
+        mock_db.execute.side_effect = [assign_res, update_res, result_res]
+
+        resp = admin_client.post(
+            "/admin/assignments/order-001/complete",
+            json={"role": "editor"}
+        )
+        assert resp.status_code == 200, resp.json()
+        data = resp.json()
+        assert data["status"] == "editor_done"
+
+    def test_complete_proofreader(self, admin_client, mock_db):
+        assign_res = MagicMock()
+        assign_res.fetchone.return_value = self._assign_row("proofreading")
+        update_res = MagicMock()
+        result_res = MagicMock()
+        result_res.fetchone.return_value = self._assign_row("proofread_done")
+
+        mock_db.execute.side_effect = [assign_res, update_res, result_res]
+
+        resp = admin_client.post(
+            "/admin/assignments/order-001/complete",
+            json={"role": "proofreader"}
+        )
+        assert resp.status_code == 200, resp.json()
+        data = resp.json()
+        assert data["status"] == "proofread_done"
+
+    def test_complete_editor_wrong_status_returns_400(self, admin_client, mock_db):
+        assign_res = MagicMock()
+        assign_res.fetchone.return_value = self._assign_row("pending")
+
+        mock_db.execute.side_effect = [assign_res, MagicMock()]
+
+        resp = admin_client.post(
+            "/admin/assignments/order-001/complete",
+            json={"role": "editor"}
+        )
+        assert resp.status_code == 400
+        assert "Editor can only complete" in resp.json()["detail"]
+
+    def test_complete_proofreader_wrong_status_returns_400(self, admin_client, mock_db):
+        assign_res = MagicMock()
+        assign_res.fetchone.return_value = self._assign_row("editing")
+
+        mock_db.execute.side_effect = [assign_res, MagicMock()]
+
+        resp = admin_client.post(
+            "/admin/assignments/order-001/complete",
+            json={"role": "proofreader"}
+        )
+        assert resp.status_code == 400
+        assert "Proofreader can only complete" in resp.json()["detail"]
+
+    def test_complete_assignment_not_found_returns_404(self, admin_client, mock_db):
+        assign_res = MagicMock()
+        assign_res.fetchone.return_value = None
+
+        mock_db.execute.side_effect = [assign_res, MagicMock()]
+
+        resp = admin_client.post(
+            "/admin/assignments/nonexistent/complete",
+            json={"role": "editor"}
+        )
+        assert resp.status_code == 404
+
+    def test_complete_invalid_role_returns_400(self, admin_client):
+        resp = admin_client.post(
+            "/admin/assignments/order-001/complete",
+            json={"role": "translator"}
+        )
+        assert resp.status_code == 400
+
+
+class TestGetAssignment:
+    def test_get_assignment_not_found_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+
+        resp = admin_client.get("/admin/assignments/nonexistent")
+        assert resp.status_code == 404
+
+    def test_get_assignment_success(self, admin_client, mock_db):
+        from datetime import datetime, timezone
+        row = MagicMock()
+        row._mapping = {
+            "id": "assign-001",
+            "order_id": "order-001",
+            "editor_id": "editor-001",
+            "proofreader_id": None,
+            "status": "editing",
+            "assigned_at": datetime.now(timezone.utc),
+            "editor_submitted_at": None,
+            "proofread_submitted_at": None,
+        }
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        resp = admin_client.get("/admin/assignments/order-001")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["order_id"] == "order-001"
+        assert data["status"] == "editing"
+
+
 class TestAdminOrderStatus:
     def test_order_not_found_returns_404(self, admin_client, mock_db):
         mock_db.execute.return_value.fetchone.return_value = None

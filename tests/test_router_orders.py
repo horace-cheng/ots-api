@@ -69,7 +69,8 @@ class TestCreateOrder:
             "price_ntd": 1,
         })
         assert resp.status_code == 201
-        assert resp.json()["price_ntd"] == 30000  # 5000 * 6
+        assert resp.json()["price_ntd"] == 0  # LT awaits quote, price set later
+        assert resp.json()["status"] == "awaiting_quote"
 
     def test_title_stored_when_provided(self, orders_client):
         resp = orders_client.post("/orders", json={
@@ -141,6 +142,25 @@ class TestCancelOrder:
         resp = orders_client.delete("/orders/order-001")
         assert resp.status_code == 400
 
+    def test_cannot_cancel_awaiting_quote_order(self, orders_client, mock_db):
+        row = MagicMock()
+        row.id = "order-001"
+        row.status = "awaiting_quote"
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        resp = orders_client.delete("/orders/order-001")
+        assert resp.status_code == 200  # LT orders CAN be cancelled while awaiting quote
+        assert resp.json()["message"] == "Order cancelled"
+
+    def test_cannot_cancel_quoted_order(self, orders_client, mock_db):
+        row = MagicMock()
+        row.id = "order-001"
+        row.status = "quoted"
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        resp = orders_client.delete("/orders/order-001")
+        assert resp.status_code == 400
+
     def test_order_not_found_404(self, orders_client, mock_db):
         mock_db.execute.return_value.fetchone.return_value = None
         resp = orders_client.delete("/orders/nonexistent")
@@ -181,6 +201,37 @@ class TestGetOrder:
         assert data["id"] == "order-001"
         assert data["status"] == "paid"
         assert data["track_type"] == "fast"
+
+    def test_literary_order_returns_quoted_price(self, orders_client, mock_db):
+        from datetime import datetime, timezone
+        row = MagicMock()
+        row._mapping = {
+            "id":              "order-001",
+            "track_type":      "literary",
+            "status":          "quoted",
+            "source_lang":     "zh-tw",
+            "target_lang":     "en",
+            "word_count":      5000,
+            "price_ntd":       30000,
+            "quoted_price":    30000,
+            "reference_price": 30000,
+            "quoted_at":       datetime(2026, 5, 1, tzinfo=timezone.utc),
+            "title":           None,
+            "notes":           None,
+            "created_at":      datetime(2026, 4, 27, tzinfo=timezone.utc),
+            "deadline_at":     None,
+            "delivered_at":    None,
+            "payment_status":  "pending",
+            "invoice_no":      None,
+            "gcs_output_path": None,
+        }
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        resp = orders_client.get("/orders/order-001")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["track_type"] == "literary"
+        assert data["status"] == "quoted"
 
 
 class TestListOrders:

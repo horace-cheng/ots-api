@@ -15,7 +15,7 @@ from core.database import get_db
 from core.config import settings
 from routers.auth import get_current_user
 from models.schemas import (
-    OrderCreate, OrderResponse, OrderDetail, OrderListResponse, MessageResponse
+    OrderCreate, OrderResponse, OrderDetail, OrderListResponse, MessageResponse, QuoteUpdate
 )
 from services.payment import get_payment_gateway, PaymentRequest, PaymentMethod
 
@@ -57,42 +57,52 @@ async def create_order(
     回傳 order_id 和 payment_url（付款頁面）。
     """
     order_id = str(uuid.uuid4())
-    price    = _calc_price(body.track_type, body.word_count, body.target_lang)
-    deadline = _calc_deadline(body.track_type)
     now      = datetime.now(timezone.utc)
-    title    = (body.title or "").strip() or None  # NULL means: generate from content on upload confirm
+    title    = (body.title or "").strip() or None
+    is_lit   = body.track_type == "literary"
+
+    # Fast Track: upfront pricing; Literary Track: awaiting quote
+    price    = 0 if is_lit else _calc_price(body.track_type, body.word_count, body.target_lang)
+    ref_price = None if not is_lit else _calc_price(body.track_type, body.word_count, body.target_lang)
+    deadline = _calc_deadline(body.track_type)
+    status   = "awaiting_quote" if is_lit else "pending_payment"
 
     # 建立訂單
     await db.execute(text("""
         INSERT INTO orders (
             id, user_id, track_type, status,
             source_lang, target_lang, word_count, price_ntd,
+            reference_price,
             title, notes, created_at, deadline_at
         )
         SELECT
-            :id, u.id, :track_type, 'pending_payment',
+            :id, u.id, :track_type, :status,
             :source_lang, :target_lang, :word_count, :price_ntd,
+            :reference_price,
             :title, :notes, :now, :deadline
         FROM users u WHERE u.uid_firebase = :uid
     """), {
-        "id":          order_id,
-        "track_type":  body.track_type,
-        "source_lang": body.source_lang,
-        "target_lang": body.target_lang,
-        "word_count":  body.word_count,
-        "price_ntd":   price,
-        "title":       title,
-        "notes":       body.notes,
-        "now":         now,
-        "deadline":    deadline,
-        "uid":         user["uid"],
+        "id":             order_id,
+        "track_type":     body.track_type,
+        "status":         status,
+        "source_lang":    body.source_lang,
+        "target_lang":    body.target_lang,
+        "word_count":     body.word_count,
+        "price_ntd":      price,
+        "reference_price": ref_price,
+        "title":          title,
+        "notes":          body.notes,
+        "now":            now,
+        "deadline":       deadline,
+        "uid":            user["uid"],
     })
 
-    # 建立付款記錄
-    await db.execute(text("""
-        INSERT INTO payments (order_id, amount_ntd, payment_status)
-        VALUES (:order_id, :amount, 'pending')
-    """), {"order_id": order_id, "amount": price})
+    # 建立付款記錄（LT 報價後才建立）
+    if not is_lit:
+        await db.execute(text("""
+            INSERT INTO payments (order_id, amount_ntd, payment_status)
+            VALUES (:order_id, :amount, 'pending')
+        """), {"order_id": order_id, "amount": price})
 
     # Literary Track：建立指派記錄（待 admin 指派編輯）
     if body.track_type == "literary":
@@ -109,31 +119,36 @@ async def create_order(
 
     await db.commit()
 
-    # 建立付款 URL
-    gateway = get_payment_gateway()
-    base_url = settings.web_portal_url
-    payment_req = PaymentRequest(
-        order_id    = order_id,
-        amount_ntd  = price,
-        description = f"OTS {body.track_type.upper()} 翻譯服務 ({body.word_count}字)",
-        return_url  = f"{base_url}/orders/{order_id}",
-        notify_url  = f"{base_url}/payments/webhook",
-        method      = PaymentMethod.CREDIT_CARD,
-    )
-    payment_result = gateway.create_payment(payment_req)
+    # 建立付款 URL（LT 報價後才建立）
+    if is_lit:
+        payment_url = ""
+    else:
+        gateway = get_payment_gateway()
+        base_url = settings.web_portal_url
+        payment_req = PaymentRequest(
+            order_id    = order_id,
+            amount_ntd  = price,
+            description = f"OTS {body.track_type.upper()} 翻譯服務 ({body.word_count}字)",
+            return_url  = f"{base_url}/orders/{order_id}",
+            notify_url  = f"{base_url}/payments/webhook",
+            method      = PaymentMethod.CREDIT_CARD,
+        )
+        payment_result = gateway.create_payment(payment_req)
 
-    # 回存 gateway_trade_no
-    await db.execute(text("""
-        UPDATE payments SET ecpay_trade_no = :trade_no WHERE order_id = :order_id
-    """), {"trade_no": payment_result.gateway_trade_no, "order_id": order_id})
-    await db.commit()
+        # 回存 gateway_trade_no
+        await db.execute(text("""
+            UPDATE payments SET ecpay_trade_no = :trade_no WHERE order_id = :order_id
+        """), {"trade_no": payment_result.gateway_trade_no, "order_id": order_id})
+        await db.commit()
 
-    logger.info(f"Order created: {order_id} ({body.track_type}, {body.word_count}字, NT${price})")
+        payment_url = payment_result.payment_url
+
+    logger.info(f"Order created: {order_id} ({body.track_type}, {body.word_count}字, status={status})")
 
     return OrderResponse(
         order_id    = order_id,
-        status      = "pending_payment",
-        payment_url = payment_result.payment_url,
+        status      = status,
+        payment_url = payment_url,
         track_type  = body.track_type,
         word_count  = body.word_count,
         price_ntd   = price,
@@ -167,7 +182,7 @@ async def list_orders(
     result = await db.execute(text(f"""
         SELECT
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
-            o.word_count, o.price_ntd, o.title, o.notes,
+            o.word_count, o.price_ntd, o.quoted_price, o.reference_price, o.title, o.notes,
             o.created_at, o.deadline_at, o.delivered_at,
             o.gcs_output_path,
             p.payment_status, p.invoice_no
@@ -203,7 +218,7 @@ async def get_order(
     result = await db.execute(text("""
         SELECT
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
-            o.word_count, o.price_ntd, o.title, o.notes,
+            o.word_count, o.price_ntd, o.quoted_price, o.reference_price, o.title, o.notes,
             o.created_at, o.deadline_at, o.delivered_at,
             o.gcs_output_path,
             p.payment_status, p.invoice_no
@@ -240,7 +255,7 @@ async def cancel_order(
     row = result.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Order not found")
-    if row.status != "pending_payment":
+    if row.status not in ("pending_payment", "awaiting_quote"):
         raise HTTPException(
             status_code=400,
             detail=f"Cannot cancel order with status '{row.status}'"

@@ -19,7 +19,8 @@ from routers.auth import get_admin_user
 from models.schemas import (
     QAFlagResponse, QAFlagListResponse, QAFlagResolve,
     AssignmentUpdate, AssignmentResponse, AssignmentListResponse,
-    PaymentConfirm, MessageResponse,
+    AssignmentAction, AssignmentComplete,
+    PaymentConfirm, MessageResponse, QuoteUpdate,
     OrderDetail, AdminOrderDetail, OrderListResponse,
     DownloadUrlResponse, OriginalContentResponse,
     UserListItem, UserListResponse, UserUpdateRequest, UserLanguageUpdate, UserLanguage,
@@ -134,6 +135,69 @@ async def resolve_qa_flag(
     return MessageResponse(message="QA flag resolved")
 
 
+# ── Literary Track 報價 ──────────────────────────────────────────────────────
+@router.post("/orders/{order_id}/quote", response_model=MessageResponse)
+async def set_order_quote(
+    order_id: str,
+    body:  QuoteUpdate,
+    admin: dict           = Depends(get_admin_user),
+    db:   AsyncSession    = Depends(get_db),
+):
+    """
+    Admin issues or revises a quote for a Literary Track order.
+    Only allowed when status is 'awaiting_quote' or 'quoted' (before payment).
+    """
+    result = await db.execute(text("""
+        SELECT o.id, o.status, o.track_type, o.price_ntd
+        FROM orders o
+        WHERE o.id = :order_id
+    """), {"order_id": order_id})
+
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if row.track_type != "literary":
+        raise HTTPException(status_code=400, detail="Quote only applies to Literary Track orders")
+    if row.status not in ("awaiting_quote", "quoted"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot set quote for order with status '{row.status}'"
+        )
+
+    now = datetime.now(timezone.utc)
+    await db.execute(text("""
+        UPDATE orders
+        SET quoted_price  = :price,
+            quoted_at     = :now,
+            price_ntd     = :price,
+            status        = 'quoted'
+        WHERE id = :order_id
+    """), {"price": body.price, "now": now, "order_id": order_id})
+
+    # 若付款記錄已存在（首次報價），更新金額
+    await db.execute(text("""
+        UPDATE payments
+        SET amount_ntd = :price
+        WHERE order_id = :order_id AND payment_status = 'pending'
+    """), {"price": body.price, "order_id": order_id})
+
+    # 若付款記錄不存在（首次報價），建立付款記錄
+    result = await db.execute(text("""
+        SELECT id FROM payments WHERE order_id = :order_id
+    """), {"order_id": order_id})
+    if not result.fetchone():
+        await db.execute(text("""
+            INSERT INTO payments (order_id, amount_ntd, payment_status)
+            VALUES (:order_id, :amount, 'pending')
+        """), {"order_id": order_id, "amount": body.price})
+
+    await db.commit()
+
+    # TODO: send email notification to user
+    logger.info(f"Quote set: order={order_id}, price={body.price}")
+    return MessageResponse(message=f"Quote set: NT${body.price}")
+
+
 # ── 手動付款確認（ManualPaymentGateway 用）───────────────────────────────────
 @router.post("/payments/{order_id}/confirm", response_model=MessageResponse)
 async def confirm_manual_payment(
@@ -147,7 +211,7 @@ async def confirm_manual_payment(
     僅適用於 ManualPaymentGateway（PAYMENT_GATEWAY=manual）。
     """
     result = await db.execute(text("""
-        SELECT o.id, o.status, o.price_ntd, p.payment_status
+        SELECT o.id, o.status, o.price_ntd, o.quoted_price, o.track_type, p.payment_status
         FROM orders o
         JOIN payments p ON p.order_id = o.id
         WHERE o.id = :order_id
@@ -161,11 +225,12 @@ async def confirm_manual_payment(
     if row.status == "cancelled":
         raise HTTPException(status_code=400, detail="Order is cancelled")
 
-    # 金額驗證
-    if body.confirmed_amount_ntd != row.price_ntd:
+    # LT 使用 quoted_price，FT 使用 price_ntd
+    expected_amount = row.quoted_price if row.track_type == "literary" else row.price_ntd
+    if body.confirmed_amount_ntd != expected_amount:
         raise HTTPException(
             status_code=400,
-            detail=f"Amount mismatch: expected {row.price_ntd}, got {body.confirmed_amount_ntd}"
+            detail=f"Amount mismatch: expected {expected_amount}, got {body.confirmed_amount_ntd}"
         )
 
     now = datetime.now(timezone.utc)
@@ -280,6 +345,32 @@ async def list_assignments(
     return AssignmentListResponse(assignments=assignments, total=total)
 
 
+@router.get("/assignments/{order_id}")
+async def get_assignment(
+    order_id: str,
+    admin: dict         = Depends(get_admin_user),
+    db:   AsyncSession  = Depends(get_db),
+):
+    """
+    Get assignment status for a single order.
+    Called by Cloud Workflows to poll editor/proofreader completion.
+    """
+    result = await db.execute(text("""
+        SELECT
+            la.id, la.order_id, la.editor_id, la.proofreader_id,
+            la.status, la.assigned_at,
+            la.editor_submitted_at, la.proofread_submitted_at
+        FROM literary_assignments la
+        WHERE la.order_id = :order_id
+    """), {"order_id": order_id})
+
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    return AssignmentResponse(**dict(row._mapping))
+
+
 @router.patch("/assignments/{order_id}", response_model=AssignmentResponse)
 async def update_assignment(
     order_id: str,
@@ -321,6 +412,160 @@ async def update_assignment(
     row = result.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Assignment not found")
+    return AssignmentResponse(**dict(row._mapping))
+
+
+# ── Literary Track: Role-based Assignment ────────────────────────────────────
+@router.post("/assignments/{order_id}", response_model=AssignmentResponse)
+async def assign_literary_role(
+    order_id: str,
+    body:  AssignmentAction,
+    admin: dict             = Depends(get_admin_user),
+    db:   AsyncSession      = Depends(get_db),
+):
+    """
+    Assign an editor or proofreader by user_id or email.
+    Sets the appropriate timestamp and transitions status.
+    """
+    if body.role not in ("editor", "proofreader"):
+        raise HTTPException(status_code=400, detail="role must be 'editor' or 'proofreader'")
+    if not body.user_id and not body.email:
+        raise HTTPException(status_code=400, detail="user_id or email is required")
+
+    # Find user
+    if body.user_id:
+        user_result = await db.execute(text("""
+            SELECT id, is_editor FROM users WHERE id = :user_id
+        """), {"user_id": body.user_id})
+    else:
+        user_result = await db.execute(text("""
+            SELECT id, is_editor FROM users WHERE email = :email
+        """), {"email": body.email})
+
+    user_row = user_result.fetchone()
+    if not user_row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if body.role == "editor" and not user_row.is_editor:
+        raise HTTPException(status_code=400, detail="User does not have editor role")
+
+    now = datetime.now(timezone.utc)
+
+    if body.role == "editor":
+        # Check assignment exists
+        assign_result = await db.execute(text("""
+            SELECT status FROM literary_assignments WHERE order_id = :order_id
+        """), {"order_id": order_id})
+        assign_row = assign_result.fetchone()
+        if not assign_row:
+            raise HTTPException(status_code=404, detail="Literary assignment not found")
+        if assign_row.status not in ("pending", "editing"):
+            raise HTTPException(status_code=400, detail=f"Cannot assign editor when status is '{assign_row.status}'")
+
+        await db.execute(text("""
+            UPDATE literary_assignments
+            SET editor_id = :user_id,
+                status = 'editing',
+                editor_assigned_at = :now
+            WHERE order_id = :order_id
+        """), {"user_id": str(user_row.id), "now": now, "order_id": order_id})
+
+        # Transition order status: awaiting_quote/quoted/paid → processing
+        await db.execute(text("""
+            UPDATE orders SET status = 'processing'
+            WHERE id = :order_id AND status IN ('awaiting_quote', 'quoted', 'paid')
+        """), {"order_id": order_id})
+
+    else:
+        # proofreader
+        assign_result = await db.execute(text("""
+            SELECT status FROM literary_assignments WHERE order_id = :order_id
+        """), {"order_id": order_id})
+        assign_row = assign_result.fetchone()
+        if not assign_row:
+            raise HTTPException(status_code=404, detail="Literary assignment not found")
+        if assign_row.status not in ("editor_done", "proofreading"):
+            raise HTTPException(status_code=400, detail=f"Cannot assign proofreader when status is '{assign_row.status}'")
+
+        await db.execute(text("""
+            UPDATE literary_assignments
+            SET proofreader_id = :user_id,
+                status = 'proofreading',
+                proofreader_assigned_at = :now
+            WHERE order_id = :order_id
+        """), {"user_id": str(user_row.id), "now": now, "order_id": order_id})
+
+    await db.commit()
+
+    result = await db.execute(text("""
+        SELECT id, order_id, editor_id, proofreader_id,
+               status, assigned_at, editor_submitted_at, proofread_submitted_at
+        FROM literary_assignments WHERE order_id = :order_id
+    """), {"order_id": order_id})
+
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    return AssignmentResponse(**dict(row._mapping))
+
+
+# ── Literary Track: Mark Editor/Proofreader Complete ─────────────────────────
+@router.post("/assignments/{order_id}/complete", response_model=AssignmentResponse)
+async def complete_assignment(
+    order_id: str,
+    body:  AssignmentComplete,
+    admin: dict             = Depends(get_admin_user),
+    db:   AsyncSession      = Depends(get_db),
+):
+    """
+    Mark editor or proofreader work as complete.
+    Transitions: editing → editor_done, proofreading → proofread_done.
+    """
+    if body.role not in ("editor", "proofreader"):
+        raise HTTPException(status_code=400, detail="role must be 'editor' or 'proofreader'")
+
+    assign_result = await db.execute(text("""
+        SELECT id, status, editor_id, proofreader_id
+        FROM literary_assignments WHERE order_id = :order_id
+    """), {"order_id": order_id})
+
+    assign_row = assign_result.fetchone()
+    if not assign_row:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    now = datetime.now(timezone.utc)
+
+    if body.role == "editor":
+        if assign_row.status != "editing":
+            raise HTTPException(status_code=400, detail=f"Editor can only complete when status is 'editing', got '{assign_row.status}'")
+        await db.execute(text("""
+            UPDATE literary_assignments
+            SET status = 'editor_done',
+                editor_submitted_at = :now,
+                editor_completed_at = :now
+            WHERE order_id = :order_id
+        """), {"now": now, "order_id": order_id})
+
+    else:
+        if assign_row.status not in ("proofreading", "editor_done"):
+            raise HTTPException(status_code=400, detail=f"Proofreader can only complete when status is 'proofreading', got '{assign_row.status}'")
+        await db.execute(text("""
+            UPDATE literary_assignments
+            SET status = 'proofread_done',
+                proofread_submitted_at = :now,
+                proofreader_completed_at = :now
+            WHERE order_id = :order_id
+        """), {"now": now, "order_id": order_id})
+
+    await db.commit()
+
+    result = await db.execute(text("""
+        SELECT id, order_id, editor_id, proofreader_id,
+               status, assigned_at, editor_submitted_at, proofread_submitted_at
+        FROM literary_assignments WHERE order_id = :order_id
+    """), {"order_id": order_id})
+
+    row = result.fetchone()
     return AssignmentResponse(**dict(row._mapping))
 
 

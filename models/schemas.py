@@ -30,6 +30,8 @@ class LangCode(str, Enum):
 
 class OrderStatus(str, Enum):
     PENDING_PAYMENT = "pending_payment"
+    AWAITING_QUOTE  = "awaiting_quote"
+    QUOTED          = "quoted"
     PAID            = "paid"
     PROCESSING      = "processing"
     QA_REVIEW       = "qa_review"
@@ -115,7 +117,9 @@ class OrderDetail(BaseModel):
     source_lang:     str
     target_lang:     str
     word_count:      int
-    price_ntd:       int
+    price_ntd:       Optional[int]
+    quoted_price:    Optional[int] = None
+    reference_price: Optional[int] = None
     title:           Optional[str]
     notes:           Optional[str]
     created_at:      datetime
@@ -209,6 +213,9 @@ class PaymentConfirm(BaseModel):
 
 
 # ── Admin: Literary Track 指派 ────────────────────────────────────────────────
+class QuoteUpdate(BaseModel):
+    price: int = Field(..., gt=0, description="報價金額（NTD）")
+
 class AssignmentUpdate(BaseModel):
     editor_id:       Optional[str] = None
     proofreader_id:  Optional[str] = None
@@ -231,6 +238,17 @@ class QAFlagListResponse(BaseModel):
 class AssignmentListResponse(BaseModel):
     assignments: List[AssignmentResponse]
     total: int
+
+# ── Literary Track: Assignment Actions ───────────────────────────────────────
+class AssignmentAction(BaseModel):
+    """Assign editor or proofreader to a literary track order."""
+    role: str = Field(..., description="editor or proofreader")
+    user_id: Optional[str] = None
+    email: Optional[str] = None
+
+class AssignmentComplete(BaseModel):
+    """Mark editor or proofreader work as complete."""
+    role: str = Field(..., description="editor or proofreader")
 
 # ── Admin: 帳號管理 ───────────────────────────────────────────────────────────
 class UserListItem(BaseModel):
