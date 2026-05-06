@@ -149,3 +149,11 @@ async def get_reviewer_user(
         raise HTTPException(status_code=403, detail="Editor or QA access required")
 
     return current_user
+
+
+async def get_lt_user(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Literary Track editor/proofreader portal. Any authenticated user is allowed;
+    actual access is verified by checking literary_assignments in each endpoint."""
+    return current_user

@@ -12,12 +12,13 @@ import logging
 
 from core.database import get_db
 from core import storage
-from routers.auth import get_editor_user, get_reviewer_user
+from routers.auth import get_editor_user, get_reviewer_user, get_lt_user
 from models.schemas import (
     OrderDetail, OrderListResponse,
     QASegment, QASegmentListResponse, QASegmentsBatchUpdate,
     MessageResponse, QAFlagResponse, EditorAssignRequest,
-    UserListResponse, UserListItem
+    UserListResponse, UserListItem,
+    AssignmentResponse, AssignmentListResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -329,3 +330,220 @@ async def assign_qa_to_order(
     """), {"qa_id": qa_id, "id": order_id})
     await db.commit()
     return MessageResponse(message="QA assigned by editor")
+
+
+# ── Literary Track: Editor / Proofreader Portal ──────────────────────────────
+# These endpoints let editors and proofreaders work on LT orders they're
+# assigned to via the admin assignment flow.
+
+@router.get("/lt/assignments", response_model=AssignmentListResponse)
+async def list_lt_assignments(
+    user:   dict       = Depends(get_lt_user),
+    db:     AsyncSession = Depends(get_db),
+    limit:  int = 50,
+    offset: int = 0,
+):
+    """List Literary Track orders assigned to the current user as editor or proofreader."""
+    params = {"user_id": user["user_id"], "limit": limit, "offset": offset}
+    is_admin = user.get("is_admin", False)
+
+    if is_admin:
+        where = ""
+    else:
+        where = "WHERE la.editor_id = :user_id OR la.proofreader_id = :user_id"
+
+    result = await db.execute(text(f"""
+        SELECT
+            la.id, la.order_id, la.editor_id, la.proofreader_id,
+            la.status, la.assigned_at,
+            la.editor_submitted_at, la.proofread_submitted_at
+        FROM literary_assignments la
+        {where}
+        ORDER BY la.assigned_at DESC
+        LIMIT :limit OFFSET :offset
+    """), params)
+
+    rows = result.fetchall()
+    assignments = [AssignmentResponse(**dict(r._mapping)) for r in rows]
+
+    count_result = await db.execute(text(f"""
+        SELECT COUNT(*) FROM literary_assignments la {where}
+    """), {"user_id": user["user_id"]} if not is_admin else {})
+    total = count_result.scalar() or 0
+
+    return AssignmentListResponse(assignments=assignments, total=total)
+
+
+@router.get("/lt/orders/{order_id}", response_model=OrderDetail)
+async def get_lt_order(
+    order_id: str,
+    user:   dict       = Depends(get_lt_user),
+    db:     AsyncSession = Depends(get_db),
+):
+    """Get Literary Track order details if the user is assigned as editor or proofreader."""
+    result = await db.execute(text("""
+        SELECT
+            o.id, o.track_type, o.status, o.source_lang, o.target_lang,
+            o.word_count, o.price_ntd, o.title, o.notes,
+            o.created_at, o.deadline_at, o.delivered_at,
+            o.gcs_output_path, o.editor_id, o.qa_id,
+            p.payment_status, p.invoice_no
+        FROM orders o
+        LEFT JOIN payments p ON p.order_id = o.id
+        JOIN literary_assignments la ON la.order_id = o.id
+        WHERE o.id = :id
+          AND o.track_type = 'literary'
+          AND (la.editor_id = :user_id OR la.proofreader_id = :user_id
+               OR :is_admin = true)
+    """), {
+        "id":        order_id,
+        "user_id":   user["user_id"],
+        "is_admin":  user.get("is_admin", False)
+    })
+
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found or access denied")
+
+    return OrderDetail(**dict(row._mapping))
+
+
+@router.get("/lt/orders/{order_id}/segments", response_model=QASegmentListResponse)
+async def get_lt_order_segments(
+    order_id: str,
+    user:     dict       = Depends(get_lt_user),
+    db:       AsyncSession = Depends(get_db),
+):
+    """Get segments for a Literary Track order assigned to the current user."""
+    # 1. Verify assignment
+    res = await db.execute(text("""
+        SELECT la.status FROM literary_assignments la
+        JOIN orders o ON o.id = la.order_id
+        WHERE o.id = :id AND o.track_type = 'literary'
+          AND (la.editor_id = :user_id OR la.proofreader_id = :user_id
+               OR :is_admin = true)
+    """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+    assignment = res.fetchone()
+    if not assignment:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # 2. Read segments from GCS
+    segments_raw = storage.read_temp_json(order_id, "segments.json")
+    translations = storage.read_temp_json(order_id, "translations.json")
+    trans_raw    = storage.read_temp_json(order_id, "translations_raw.json")
+
+    if not segments_raw or not translations:
+        raise HTTPException(status_code=404, detail="Segments or translations not found")
+
+    # 3. Build response
+    raw_map = {t["index"]: t["translated"] for t in trans_raw} if isinstance(trans_raw, list) else {}
+    trans_map = {t["index"]: t for t in translations} if isinstance(translations, list) else {}
+
+    res_segments = []
+    for s in segments_raw:
+        idx = s["index"]
+        t = trans_map.get(idx, {})
+        res_segments.append(QASegment(
+            index      = idx,
+            source     = s["text"],
+            translated = t.get("translated", ""),
+            raw        = raw_map.get(idx),
+            comments   = t.get("comments"),
+            editor_comments = t.get("editor_comments"),
+            flags      = [],
+        ))
+
+    return QASegmentListResponse(segments=res_segments)
+
+
+@router.patch("/lt/orders/{order_id}/segments", response_model=MessageResponse)
+async def update_lt_order_segments(
+    order_id: str,
+    body:     QASegmentsBatchUpdate,
+    user:     dict       = Depends(get_lt_user),
+    db:       AsyncSession = Depends(get_db),
+):
+    """Save draft edits for a Literary Track order."""
+    # 1. Verify assignment
+    res = await db.execute(text("""
+        SELECT la.status FROM literary_assignments la
+        JOIN orders o ON o.id = la.order_id
+        WHERE o.id = :id AND o.track_type = 'literary'
+          AND (la.editor_id = :user_id OR la.proofreader_id = :user_id
+               OR :is_admin = true)
+    """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+    if not res.fetchone():
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    translations = storage.read_temp_json(order_id, "translations.json")
+    if not translations:
+        raise HTTPException(status_code=404, detail="Translations not found")
+
+    trans_map = {t["index"]: t for t in translations}
+    for up in body.segments:
+        if up.index in trans_map:
+            trans_map[up.index]["translated"] = up.translated
+            if up.comments is not None:
+                trans_map[up.index]["comments"] = up.comments
+            if up.editor_comments is not None:
+                trans_map[up.index]["editor_comments"] = up.editor_comments
+
+    storage.write_temp_json(order_id, "translations.json", list(trans_map.values()))
+    return MessageResponse(message="Segments updated")
+
+
+@router.post("/lt/orders/{order_id}/complete", response_model=MessageResponse)
+async def complete_lt_assignment(
+    order_id: str,
+    user:     dict       = Depends(get_lt_user),
+    db:       AsyncSession = Depends(get_db),
+):
+    """
+    Mark Literary Track work as complete.
+    - Editor completes: editing → editor_done
+    - Proofreader completes: proofreading → proofread_done
+    """
+    # 1. Get assignment
+    res = await db.execute(text("""
+        SELECT la.status, la.editor_id, la.proofreader_id
+        FROM literary_assignments la
+        JOIN orders o ON o.id = la.order_id
+        WHERE o.id = :id AND o.track_type = 'literary'
+          AND (la.editor_id = :user_id OR la.proofreader_id = :user_id
+               OR :is_admin = true)
+    """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+    assignment = res.fetchone()
+    if not assignment:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    is_editor = assignment.editor_id == user["user_id"] or user.get("is_admin")
+
+    if is_editor:
+        if assignment.status != "editing":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Editor can only complete when status is 'editing', got '{assignment.status}'"
+            )
+        await db.execute(text("""
+            UPDATE literary_assignments
+            SET status = 'editor_done',
+                editor_submitted_at = NOW(),
+                editor_completed_at = NOW()
+            WHERE order_id = :id
+        """), {"id": order_id})
+    else:
+        if assignment.status not in ("proofreading", "editor_done"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Proofreader can only complete when status is 'proofreading' or 'editor_done', got '{assignment.status}'"
+            )
+        await db.execute(text("""
+            UPDATE literary_assignments
+            SET status = 'proofread_done',
+                proofread_submitted_at = NOW(),
+                proofreader_completed_at = NOW()
+            WHERE order_id = :id
+        """), {"id": order_id})
+
+    await db.commit()
+    return MessageResponse(message="Assignment completed")
