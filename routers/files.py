@@ -101,10 +101,10 @@ async def get_upload_url(
     row = result.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Order not found")
-    if row.status not in ("pending_payment", "paid"):
+    if row.status not in ("pending_payment", "paid", "awaiting_quote"):
         raise HTTPException(
             status_code=400,
-            detail="Can only upload files for pending_payment or paid orders"
+            detail="Can only upload files for pending_payment, awaiting_quote, or paid orders"
         )
 
     signed_url, gcs_path = generate_upload_signed_url(

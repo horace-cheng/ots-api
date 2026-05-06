@@ -64,7 +64,7 @@ class TestGetUploadUrl:
             "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         })
         assert resp.status_code == 400
-        assert "pending_payment or paid" in resp.json()["detail"]
+        assert "pending_payment" in resp.json()["detail"]
 
     def test_success_returns_signed_url(self, files_client, mock_db):
         row = MagicMock()
@@ -91,6 +91,19 @@ class TestGetUploadUrl:
             "order_id": "order-001",
             "filename": "source.txt",
             "content_type": "text/plain",
+        })
+        assert resp.status_code == 200
+
+    def test_awaiting_quote_status_allowed(self, files_client, mock_db):
+        """LT orders are created with awaiting_quote status and should allow file upload."""
+        row = MagicMock()
+        row.status = "awaiting_quote"
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        resp = files_client.post("/files/upload-url", json={
+            "order_id": "order-001",
+            "filename": "manuscript.docx",
+            "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         })
         assert resp.status_code == 200
 
