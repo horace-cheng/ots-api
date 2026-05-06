@@ -303,6 +303,22 @@ class EditorAssignRequest(BaseModel):
     qa_id:     Optional[str] = None
 
 
+# ── Support Files ─────────────────────────────────────────────────────────────
+class SupportFileResponse(BaseModel):
+    id:           UUIDStr
+    order_id:     UUIDStr
+    filename:     str
+    content_type: str
+    file_size:    int
+    gcs_path:     str
+    file_role:    str
+    created_at:   datetime
+
+class SupportFileListResponse(BaseModel):
+    files: List[SupportFileResponse]
+    total: int
+
+
 # ── Invitations ──────────────────────────────────────────────────────────────
 class InvitationCreate(BaseModel):
     email: str

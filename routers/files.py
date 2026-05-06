@@ -15,7 +15,8 @@ from core.storage import generate_upload_signed_url, generate_download_signed_ur
 from core.config import settings
 from routers.auth import get_current_user
 from models.schemas import (
-    UploadUrlRequest, UploadUrlResponse, DownloadUrlResponse
+    UploadUrlRequest, UploadUrlResponse, DownloadUrlResponse,
+    SupportFileResponse, SupportFileListResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -200,3 +201,142 @@ async def get_download_url(
     signed_url = generate_download_signed_url(row.gcs_output_path)
 
     return DownloadUrlResponse(signed_url=signed_url, expires_in=3600)
+
+
+# ── Support Files (Literary Track) ───────────────────────────────────────────
+
+SUPPORT_CONTENT_TYPES = {
+    "text/plain",
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/csv",
+}
+
+
+@router.post("/{order_id}/support-upload-url", response_model=UploadUrlResponse)
+async def get_support_upload_url(
+    order_id: str,
+    filename: str,
+    content_type: str = "text/plain",
+    user: dict         = Depends(get_current_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """
+    Generate GCS upload Signed URL for Literary Track support files.
+    Files go to orders/{order_id}/support/ prefix.
+    """
+    if content_type not in SUPPORT_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported content type: {content_type}"
+        )
+
+    # Verify order belongs to current user and is LT
+    result = await db.execute(text("""
+        SELECT o.id, o.status FROM orders o
+        JOIN users u ON u.id = o.user_id
+        WHERE o.id = :order_id AND u.uid_firebase = :uid
+    """), {"order_id": order_id, "uid": user["uid"]})
+
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    client   = get_storage_client()
+    bucket   = client.bucket(settings.gcs_uploads_bucket)
+    gcs_path = f"orders/{order_id}/support/{filename}"
+    blob     = bucket.blob(gcs_path)
+
+    signed_url = blob.generate_signed_url(
+        version             = "v4",
+        expiration          = timedelta(minutes=30),
+        method              = "PUT",
+        content_type        = content_type,
+        credentials         = _get_signing_credentials(),
+    )
+
+    logger.info(f"Support upload URL generated: order={order_id}, path={gcs_path}")
+
+    return UploadUrlResponse(
+        signed_url = signed_url,
+        gcs_path   = gcs_path,
+        expires_in = 1800,
+    )
+
+
+@router.post("/{order_id}/support-confirm", response_model=SupportFileResponse)
+async def confirm_support_upload(
+    order_id: str,
+    filename: str,
+    content_type: str,
+    file_size: int,
+    gcs_path: str,
+    file_role: str = "reference",
+    user: dict         = Depends(get_current_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """
+    Record a support file upload in the database.
+    Called after frontend completes GCS upload.
+    """
+    # Verify order belongs to current user
+    result = await db.execute(text("""
+        SELECT o.id FROM orders o
+        JOIN users u ON u.id = o.user_id
+        WHERE o.id = :order_id AND u.uid_firebase = :uid
+    """), {"order_id": order_id, "uid": user["uid"]})
+
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    result = await db.execute(text("""
+        INSERT INTO order_support_files
+            (order_id, filename, content_type, file_size, gcs_path, file_role, uploaded_by)
+        VALUES
+            (:order_id, :filename, :content_type, :file_size, :gcs_path, :file_role, :user_id)
+        RETURNING id, order_id, filename, content_type, file_size, gcs_path, file_role, created_at
+    """), {
+        "order_id": order_id,
+        "filename": filename,
+        "content_type": content_type,
+        "file_size": file_size,
+        "gcs_path": gcs_path,
+        "file_role": file_role,
+        "user_id": user["user_id"],
+    })
+
+    file_row = result.fetchone()
+    if not file_row:
+        raise HTTPException(status_code=500, detail="Failed to record support file")
+
+    logger.info(f"Support file confirmed: order={order_id}, file={filename}, role={file_role}")
+
+    return SupportFileResponse(**dict(file_row._mapping))
+
+
+@router.get("/{order_id}/support-files", response_model=SupportFileListResponse)
+async def list_support_files(
+    order_id: str,
+    user: dict         = Depends(get_current_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """List support files for an order."""
+    result = await db.execute(text("""
+        SELECT sf.id, sf.order_id, sf.filename, sf.content_type,
+               sf.file_size, sf.gcs_path, sf.file_role, sf.created_at
+        FROM order_support_files sf
+        JOIN orders o ON o.id = sf.order_id
+        WHERE o.id = :order_id AND o.user_id = (
+            SELECT id FROM users WHERE uid_firebase = :uid
+        )
+        ORDER BY sf.created_at ASC
+    """), {"order_id": order_id, "uid": user["uid"]})
+
+    rows = result.fetchall()
+    files = [SupportFileResponse(**dict(r._mapping)) for r in rows]
+
+    return SupportFileListResponse(files=files, total=len(files))
