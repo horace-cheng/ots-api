@@ -530,14 +530,16 @@ async def complete_lt_assignment(
     if not assignment:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    is_editor = assignment.editor_id == user["user_id"] or user.get("is_admin")
+    is_editor = user.get("is_editor") or user.get("is_admin")
 
     if is_editor:
-        if assignment.status != "editing":
+        if assignment.status not in ("editing", "editor_done"):
             raise HTTPException(
                 status_code=400,
                 detail=f"Editor can only complete when status is 'editing', got '{assignment.status}'"
             )
+        if assignment.status == "editor_done":
+            return MessageResponse(message="Assignment already completed")
         await db.execute(text("""
             UPDATE assignments
             SET status = 'editor_done',
@@ -549,8 +551,10 @@ async def complete_lt_assignment(
         if assignment.status not in ("proofreading", "editor_done"):
             raise HTTPException(
                 status_code=400,
-                detail=f"Proofreader can only complete when status is 'proofreading' or 'editor_done', got '{assignment.status}'"
+                detail=f"Proofreader can only complete when status is 'proofreading', got '{assignment.status}'"
             )
+        if assignment.status == "proofread_done":
+            return MessageResponse(message="Assignment already completed")
         await db.execute(text("""
             UPDATE assignments
             SET status = 'proofread_done',
