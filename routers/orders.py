@@ -104,12 +104,11 @@ async def create_order(
             VALUES (:order_id, :amount, 'pending')
         """), {"order_id": order_id, "amount": price})
 
-    # Literary Track：建立指派記錄（待 admin 指派編輯）
-    if body.track_type == "literary":
-        await db.execute(text("""
-            INSERT INTO literary_assignments (order_id, status)
-            VALUES (:order_id, 'pending')
-        """), {"order_id": order_id})
+    # 建立指派記錄（所有訂單都使用 assignments 表）
+    await db.execute(text("""
+        INSERT INTO assignments (order_id, status)
+        VALUES (:order_id, 'pending')
+    """), {"order_id": order_id})
 
     # 語料 log（預設 consent = false，待客戶確認）
     await db.execute(text("""

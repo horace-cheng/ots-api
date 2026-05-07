@@ -157,7 +157,7 @@ async def get_assignment_internal(
     使用 OIDC 驗證（Google SA），而非 Firebase token。
     """
     result = await db.execute(text("""
-        SELECT status FROM literary_assignments WHERE order_id = :order_id
+        SELECT status FROM assignments WHERE order_id = :order_id
     """), {"order_id": order_id})
 
     row = result.fetchone()

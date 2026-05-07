@@ -325,10 +325,11 @@ async def list_assignments(
 
     result = await db.execute(text(f"""
         SELECT
-            la.id, la.order_id, la.editor_id, la.proofreader_id,
+            la.id, la.order_id, la.editor_id, la.qa_id, la.proofreader_id,
             la.status, la.assigned_at,
-            la.editor_submitted_at, la.proofread_submitted_at
-        FROM literary_assignments la
+            la.editor_submitted_at, la.proofread_submitted_at, la.qa_submitted_at,
+            la.editor_notes, la.proofreader_notes
+        FROM assignments la
         {where}
         ORDER BY la.assigned_at DESC
         LIMIT :limit OFFSET :offset
@@ -338,7 +339,7 @@ async def list_assignments(
     assignments = [AssignmentResponse(**dict(r._mapping)) for r in rows]
 
     count_result = await db.execute(text(f"""
-        SELECT COUNT(*) FROM literary_assignments la {where}
+        SELECT COUNT(*) FROM assignments la {where}
     """), {k: v for k, v in params.items() if k not in ("limit", "offset")})
     total = count_result.scalar()
 
@@ -357,10 +358,11 @@ async def get_assignment(
     """
     result = await db.execute(text("""
         SELECT
-            la.id, la.order_id, la.editor_id, la.proofreader_id,
+            la.id, la.order_id, la.editor_id, la.qa_id, la.proofreader_id,
             la.status, la.assigned_at,
-            la.editor_submitted_at, la.proofread_submitted_at
-        FROM literary_assignments la
+            la.editor_submitted_at, la.proofread_submitted_at, la.qa_submitted_at,
+            la.editor_notes, la.proofreader_notes
+        FROM assignments la
         WHERE la.order_id = :order_id
     """), {"order_id": order_id})
 
@@ -397,16 +399,17 @@ async def update_assignment(
     set_clause = ", ".join(updates)
 
     await db.execute(text(f"""
-        UPDATE literary_assignments
+         UPDATE assignments
         SET {set_clause}
         WHERE order_id = :order_id
     """), params)
     await db.commit()
 
     result = await db.execute(text("""
-        SELECT id, order_id, editor_id, proofreader_id,
-               status, assigned_at, editor_submitted_at, proofread_submitted_at
-        FROM literary_assignments WHERE order_id = :order_id
+        SELECT id, order_id, editor_id, qa_id, proofreader_id,
+               status, assigned_at, editor_submitted_at, proofread_submitted_at, qa_submitted_at,
+               editor_notes, proofreader_notes
+        FROM assignments WHERE order_id = :order_id
     """), {"order_id": order_id})
 
     row = result.fetchone()
@@ -454,7 +457,7 @@ async def assign_literary_role(
     if body.role == "editor":
         # Check assignment exists
         assign_result = await db.execute(text("""
-            SELECT status FROM literary_assignments WHERE order_id = :order_id
+            SELECT status FROM assignments WHERE order_id = :order_id
         """), {"order_id": order_id})
         assign_row = assign_result.fetchone()
         if not assign_row:
@@ -463,7 +466,7 @@ async def assign_literary_role(
             raise HTTPException(status_code=400, detail=f"Cannot assign editor when status is '{assign_row.status}'")
 
         await db.execute(text("""
-            UPDATE literary_assignments
+            UPDATE assignments
             SET editor_id = :user_id,
                 status = 'editing',
                 editor_assigned_at = :now
@@ -479,7 +482,7 @@ async def assign_literary_role(
     else:
         # proofreader
         assign_result = await db.execute(text("""
-            SELECT status FROM literary_assignments WHERE order_id = :order_id
+            SELECT status FROM assignments WHERE order_id = :order_id
         """), {"order_id": order_id})
         assign_row = assign_result.fetchone()
         if not assign_row:
@@ -488,19 +491,20 @@ async def assign_literary_role(
             raise HTTPException(status_code=400, detail=f"Cannot assign proofreader when status is '{assign_row.status}'")
 
         await db.execute(text("""
-            UPDATE literary_assignments
+            UPDATE assignments
             SET proofreader_id = :user_id,
                 status = 'proofreading',
                 proofreader_assigned_at = :now
             WHERE order_id = :order_id
-        """), {"user_id": str(user_row.id), "now": now, "order_id": order_id})
+         """), {"user_id": str(user_row.id), "now": now, "order_id": order_id})
 
     await db.commit()
 
     result = await db.execute(text("""
-        SELECT id, order_id, editor_id, proofreader_id,
-               status, assigned_at, editor_submitted_at, proofread_submitted_at
-        FROM literary_assignments WHERE order_id = :order_id
+        SELECT id, order_id, editor_id, qa_id, proofreader_id,
+               status, assigned_at, editor_submitted_at, proofread_submitted_at, qa_submitted_at,
+               editor_notes, proofreader_notes
+        FROM assignments WHERE order_id = :order_id
     """), {"order_id": order_id})
 
     row = result.fetchone()
@@ -526,7 +530,7 @@ async def complete_assignment(
 
     assign_result = await db.execute(text("""
         SELECT id, status, editor_id, proofreader_id
-        FROM literary_assignments WHERE order_id = :order_id
+        FROM assignments WHERE order_id = :order_id
     """), {"order_id": order_id})
 
     assign_row = assign_result.fetchone()
@@ -539,7 +543,7 @@ async def complete_assignment(
         if assign_row.status != "editing":
             raise HTTPException(status_code=400, detail=f"Editor can only complete when status is 'editing', got '{assign_row.status}'")
         await db.execute(text("""
-            UPDATE literary_assignments
+            UPDATE assignments
             SET status = 'editor_done',
                 editor_submitted_at = :now,
                 editor_completed_at = :now
@@ -550,7 +554,7 @@ async def complete_assignment(
         if assign_row.status not in ("proofreading", "editor_done"):
             raise HTTPException(status_code=400, detail=f"Proofreader can only complete when status is 'proofreading', got '{assign_row.status}'")
         await db.execute(text("""
-            UPDATE literary_assignments
+            UPDATE assignments
             SET status = 'proofread_done',
                 proofread_submitted_at = :now,
                 proofreader_completed_at = :now
@@ -560,9 +564,10 @@ async def complete_assignment(
     await db.commit()
 
     result = await db.execute(text("""
-        SELECT id, order_id, editor_id, proofreader_id,
-               status, assigned_at, editor_submitted_at, proofread_submitted_at
-        FROM literary_assignments WHERE order_id = :order_id
+        SELECT id, order_id, editor_id, qa_id, proofreader_id,
+               status, assigned_at, editor_submitted_at, proofread_submitted_at, qa_submitted_at,
+               editor_notes, proofreader_notes
+        FROM assignments WHERE order_id = :order_id
     """), {"order_id": order_id})
 
     row = result.fetchone()
@@ -597,17 +602,19 @@ async def admin_list_orders(
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
             o.word_count, o.price_ntd, o.title, o.notes,
             o.created_at, o.deadline_at, o.delivered_at,
-            o.gcs_output_path, o.gcs_upload_path, o.editor_id,
-            p.payment_status, p.invoice_no
+            o.gcs_output_path, o.gcs_upload_path,
+            p.payment_status, p.invoice_no,
+            a.editor_id, a.qa_id, a.proofreader_id, a.status AS assignment_status
         FROM orders o
         LEFT JOIN payments p ON p.order_id = o.id
+        LEFT JOIN assignments a ON a.order_id = o.id
         {where}
         ORDER BY o.created_at DESC
         LIMIT :limit OFFSET :offset
     """), params)
 
     rows = result.fetchall()
-    orders = [OrderDetail(**dict(r._mapping)) for r in rows]
+    orders = [AdminOrderDetail(**dict(r._mapping)) for r in rows]
 
     count_result = await db.execute(text(f"""
         SELECT COUNT(*) FROM orders o {where}
@@ -629,12 +636,14 @@ async def admin_get_order(
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
             o.word_count, o.price_ntd, o.title, o.notes,
             o.created_at, o.deadline_at, o.delivered_at,
-            o.gcs_output_path, o.gcs_upload_path, o.editor_id, o.qa_id,
+            o.gcs_output_path, o.gcs_upload_path,
             p.payment_status, p.invoice_no,
-            pj.qa_result
+            pj.qa_result,
+            a.editor_id, a.qa_id, a.proofreader_id, a.status AS assignment_status
         FROM orders o
         LEFT JOIN payments p ON p.order_id = o.id
         LEFT JOIN pipeline_jobs pj ON pj.order_id = o.id AND pj.job_type = 'qa_auto'
+        LEFT JOIN assignments a ON a.order_id = o.id
         WHERE o.id = :order_id
     """), {"order_id": order_id})
     row = result.fetchone()
@@ -991,7 +1000,7 @@ async def assign_editor(
     admin: dict        = Depends(get_admin_user),
     db:   AsyncSession = Depends(get_db),
 ):
-    """指派或更換 Editor"""
+    """指派或更換 Editor / QA"""
     editor_id = body.editor_id
     qa_id     = body.qa_id
 
@@ -1011,9 +1020,21 @@ async def assign_editor(
         if not res.fetchone():
             raise HTTPException(status_code=400, detail="User is not a QA or not found")
 
-    await db.execute(text("""
-        UPDATE orders SET editor_id = :editor_id, qa_id = :qa_id WHERE id = :id
-    """), {"editor_id": editor_id, "qa_id": qa_id, "id": order_id})
+    updates = []
+    params: dict = {"order_id": order_id}
+    if editor_id is not None:
+        updates.append("editor_id = :editor_id")
+        params["editor_id"] = editor_id
+    if qa_id is not None:
+        updates.append("qa_id = :qa_id")
+        params["qa_id"] = qa_id
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    await db.execute(text(f"""
+        UPDATE assignments SET {', '.join(updates)} WHERE order_id = :order_id
+    """), params)
     await db.commit()
     return MessageResponse(message="Editor/QA assigned")
 

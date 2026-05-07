@@ -158,7 +158,7 @@ class TestListQAFlags:
 
 
 class TestAdminGetOrder:
-    def _order_row(self, qa_result=None, gcs_output_path=None, editor_id=None, qa_id=None):
+    def _order_row(self, qa_result=None, gcs_output_path=None, editor_id=None, qa_id=None, proofreader_id=None, assignment_status=None):
         from datetime import datetime, timezone
         row = MagicMock()
         row._mapping = {
@@ -175,11 +175,13 @@ class TestAdminGetOrder:
             "deadline_at":     None,
             "delivered_at":    None,
             "gcs_output_path": gcs_output_path,
-            "editor_id":       editor_id,
-            "qa_id":           qa_id,
             "payment_status":  "paid",
             "invoice_no":      None,
             "qa_result":       qa_result,
+            "editor_id":       editor_id,
+            "qa_id":           qa_id,
+            "proofreader_id":  proofreader_id,
+            "assignment_status": assignment_status,
         }
         return row
 
@@ -416,11 +418,15 @@ class TestUpdateAssignment:
             "id": "assign-id",
             "order_id": "ORDER-001",
             "editor_id": "editor-001",
+            "qa_id": None,
             "proofreader_id": None,
             "status": "editing",
             "assigned_at": now,
             "editor_submitted_at": None,
             "proofread_submitted_at": None,
+            "qa_submitted_at": None,
+            "editor_notes": None,
+            "proofreader_notes": None,
         }
         mock_db.execute.return_value.fetchone.return_value = row
 
@@ -439,11 +445,15 @@ class TestListAssignments:
             "id": "assign-001",
             "order_id": "order-001",
             "editor_id": "editor-001",
+            "qa_id": None,
             "proofreader_id": None,
             "status": "editing",
             "assigned_at": datetime.now(timezone.utc),
             "editor_submitted_at": None,
             "proofread_submitted_at": None,
+            "qa_submitted_at": None,
+            "editor_notes": None,
+            "proofreader_notes": None,
         }
         
         res_list = MagicMock()
@@ -758,20 +768,28 @@ class TestAssignLiteraryRole:
         row.id = "assign-001"
         row.order_id = "order-001"
         row.editor_id = None
+        row.qa_id = None
         row.proofreader_id = None
         row.status = status
         row.assigned_at = datetime.now(timezone.utc)
         row.editor_submitted_at = None
         row.proofread_submitted_at = None
+        row.qa_submitted_at = None
+        row.editor_notes = None
+        row.proofreader_notes = None
         row._mapping = {
             "id": "assign-001",
             "order_id": "order-001",
             "editor_id": None,
+            "qa_id": None,
             "proofreader_id": None,
             "status": status,
             "assigned_at": datetime.now(timezone.utc),
             "editor_submitted_at": None,
             "proofread_submitted_at": None,
+            "qa_submitted_at": None,
+            "editor_notes": None,
+            "proofreader_notes": None,
         }
         return row
 
@@ -799,8 +817,8 @@ class TestAssignLiteraryRole:
 
         mock_db.execute.side_effect = self._make_execute_handler({
             "select id, is_editor": user_res,
-            "select status from literary_assignments": assign_res,
-            "select id, order_id, editor_id, proofreader_id": result_res,
+            "select status from assignments": assign_res,
+            "select id, order_id, editor_id, qa_id, proofreader_id": result_res,
         })
 
         resp = admin_client.post(
@@ -834,7 +852,7 @@ class TestAssignLiteraryRole:
 
         mock_db.execute.side_effect = self._make_execute_handler({
             "select id, is_editor": user_res,
-            "select status from literary_assignments": assign_res,
+            "select status from assignments": assign_res,
         })
 
         resp = admin_client.post(
@@ -854,8 +872,8 @@ class TestAssignLiteraryRole:
 
         mock_db.execute.side_effect = self._make_execute_handler({
             "select id, is_editor": user_res,
-            "select status from literary_assignments": assign_res,
-            "select id, order_id, editor_id, proofreader_id": result_res,
+            "select status from assignments": assign_res,
+            "select id, order_id, editor_id, qa_id, proofreader_id": result_res,
         })
 
         resp = admin_client.post(
@@ -874,7 +892,7 @@ class TestAssignLiteraryRole:
 
         mock_db.execute.side_effect = self._make_execute_handler({
             "select id, is_editor": user_res,
-            "select status from literary_assignments": assign_res,
+            "select status from assignments": assign_res,
         })
 
         resp = admin_client.post(
@@ -934,7 +952,7 @@ class TestAssignLiteraryRole:
         mock_db.execute.side_effect = self._make_execute_handler({
             "admin_users": admin_res,
             "select id, status, editor_id, proofreader_id": assign_res,
-            "select id, order_id, editor_id, proofreader_id": result_res,
+            "select id, order_id, editor_id, qa_id, proofreader_id": result_res,
         })
 
         resp = admin_client.post(
@@ -956,7 +974,7 @@ class TestAssignLiteraryRole:
         mock_db.execute.side_effect = self._make_execute_handler({
             "admin_users": admin_res,
             "select id, status, editor_id, proofreader_id": assign_res,
-            "select id, order_id, editor_id, proofreader_id": result_res,
+            "select id, order_id, editor_id, qa_id, proofreader_id": result_res,
         })
 
         resp = admin_client.post(
@@ -1028,20 +1046,28 @@ class TestCompleteAssignment:
         row.id = "assign-001"
         row.order_id = "order-001"
         row.editor_id = "editor-001"
+        row.qa_id = None
         row.proofreader_id = None
         row.status = status
         row.assigned_at = datetime.now(timezone.utc)
         row.editor_submitted_at = None
         row.proofread_submitted_at = None
+        row.qa_submitted_at = None
+        row.editor_notes = None
+        row.proofreader_notes = None
         row._mapping = {
             "id": "assign-001",
             "order_id": "order-001",
             "editor_id": "editor-001",
+            "qa_id": None,
             "proofreader_id": None,
             "status": status,
             "assigned_at": datetime.now(timezone.utc),
             "editor_submitted_at": None,
             "proofread_submitted_at": None,
+            "qa_submitted_at": None,
+            "editor_notes": None,
+            "proofreader_notes": None,
         }
         return row
 
@@ -1139,11 +1165,15 @@ class TestGetAssignment:
             "id": "assign-001",
             "order_id": "order-001",
             "editor_id": "editor-001",
+            "qa_id": None,
             "proofreader_id": None,
             "status": "editing",
             "assigned_at": datetime.now(timezone.utc),
             "editor_submitted_at": None,
             "proofread_submitted_at": None,
+            "qa_submitted_at": None,
+            "editor_notes": None,
+            "proofreader_notes": None,
         }
         mock_db.execute.return_value.fetchone.return_value = row
 

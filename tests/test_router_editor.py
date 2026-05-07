@@ -52,7 +52,6 @@ class TestEditorListOrders:
             "gcs_output_path": None,
             "editor_id": "editor-db-id",
             "qa_id": None,
-            "qa_submitted_at": None,
             "payment_status": "paid",
             "invoice_no": None
         }
@@ -84,7 +83,6 @@ class TestEditorGetOrder:
             "gcs_output_path": None,
             "editor_id": "editor-db-id",
             "qa_id": None,
-            "qa_submitted_at": None,
             "payment_status": "paid",
             "invoice_no": None
         }
@@ -355,7 +353,6 @@ class TestQaAccessSharedEndpoints:
             "gcs_output_path": None,
             "editor_id": "editor-db-id",
             "qa_id": "qa-db-id",
-            "qa_submitted_at": None,
             "payment_status": "paid",
             "invoice_no": None
         }
@@ -446,7 +443,6 @@ class TestEditorListOrdersStatusFiltering:
             "gcs_output_path": None,
             "editor_id": "editor-db-id",
             "qa_id": "qa-db-id",
-            "qa_submitted_at": None,
             "payment_status": "paid",
             "invoice_no": None
         }

@@ -44,9 +44,9 @@ async def list_assigned_orders(
     else:
         role_conds = []
         if user.get("is_editor"):
-            role_conds.append("o.editor_id = :user_id")
+            role_conds.append("a.editor_id = :user_id")
         if user.get("is_qa"):
-            role_conds.append("o.qa_id = :user_id")
+            role_conds.append("a.qa_id = :user_id")
             # QA 只能看到 qa_review 狀態的訂單，不能看到 editor_verify
             conditions.append("o.status = 'qa_review'")
         
@@ -62,7 +62,9 @@ async def list_assigned_orders(
 
     # Get total count
     count_result = await db.execute(text(f"""
-        SELECT COUNT(*) FROM orders o WHERE {where}
+        SELECT COUNT(*) FROM orders o
+        LEFT JOIN assignments a ON a.order_id = o.id
+        WHERE {where}
     """), params)
     total = count_result.scalar() or 0
 
@@ -71,10 +73,11 @@ async def list_assigned_orders(
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
             o.word_count, o.price_ntd, o.title, o.notes,
             o.created_at, o.deadline_at, o.delivered_at,
-            o.gcs_output_path, o.editor_id, o.qa_id,
+            o.gcs_output_path, a.editor_id, a.qa_id,
             p.payment_status, p.invoice_no
         FROM orders o
         LEFT JOIN payments p ON p.order_id = o.id
+        LEFT JOIN assignments a ON a.order_id = o.id
         WHERE {where}
         ORDER BY o.created_at DESC
         LIMIT :limit OFFSET :offset
@@ -97,11 +100,12 @@ async def get_editor_order(
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
             o.word_count, o.price_ntd, o.title, o.notes,
             o.created_at, o.deadline_at, o.delivered_at,
-            o.gcs_output_path, o.editor_id, o.qa_id,
+            o.gcs_output_path, a.editor_id, a.qa_id,
             p.payment_status, p.invoice_no
         FROM orders o
         LEFT JOIN payments p ON p.order_id = o.id
-        WHERE o.id = :id AND (o.editor_id = :user_id OR o.qa_id = :user_id OR :is_admin = true)
+        LEFT JOIN assignments a ON a.order_id = o.id
+        WHERE o.id = :id AND (a.editor_id = :user_id OR a.qa_id = :user_id OR :is_admin = true)
     """), {
         "id":        order_id,
         "user_id":   user["user_id"],
@@ -124,8 +128,9 @@ async def get_assigned_order_segments(
     """獲取指派訂單的段落資料 (Editor 或 QA 呼叫)"""
     # 1. 驗證權限：訂單必須指派給該使用者
     res = await db.execute(text("""
-        SELECT id, editor_id, qa_id, status FROM orders 
-        WHERE id = :id AND (editor_id = :user_id OR qa_id = :user_id OR :is_admin = true)
+        SELECT o.id, a.editor_id, a.qa_id, o.status FROM orders o
+        LEFT JOIN assignments a ON a.order_id = o.id
+        WHERE o.id = :id AND (a.editor_id = :user_id OR a.qa_id = :user_id OR :is_admin = true)
     """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
     order = res.fetchone()
     if not order:
@@ -188,8 +193,9 @@ async def update_assigned_order_segments(
     """Editor 或 QA 儲存草稿"""
     # 驗證權限
     res = await db.execute(text("""
-        SELECT id FROM orders 
-        WHERE id = :id AND (editor_id = :user_id OR qa_id = :user_id OR :is_admin = true)
+        SELECT o.id FROM orders o
+        LEFT JOIN assignments a ON a.order_id = o.id
+        WHERE o.id = :id AND (a.editor_id = :user_id OR a.qa_id = :user_id OR :is_admin = true)
     """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
     if not res.fetchone():
         raise HTTPException(status_code=403, detail="Access denied")
@@ -219,8 +225,9 @@ async def submit_review(
 ):
     """完成審閱。QA 提交後變為 editor_verify，Editor 提交後變為 delivered"""
     res = await db.execute(text("""
-        SELECT id, status, editor_id, qa_id FROM orders 
-        WHERE id = :id AND (editor_id = :user_id OR qa_id = :user_id OR :is_admin = true)
+        SELECT o.id, o.status, a.editor_id, a.qa_id FROM orders o
+        LEFT JOIN assignments a ON a.order_id = o.id
+        WHERE o.id = :id AND (a.editor_id = :user_id OR a.qa_id = :user_id OR :is_admin = true)
     """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
     order = res.fetchone()
     if not order:
@@ -232,8 +239,11 @@ async def submit_review(
     if is_qa_only and order.status == 'qa_review':
         new_status = 'editor_verify'
         await db.execute(text("""
-            UPDATE orders SET status = :status, qa_submitted_at = NOW() WHERE id = :id
+            UPDATE orders SET status = :status WHERE id = :id
         """), {"status": new_status, "id": order_id})
+        await db.execute(text("""
+            UPDATE assignments SET qa_submitted_at = NOW() WHERE order_id = :order_id
+        """), {"order_id": order_id})
     else:
         new_status = 'delivered'
         await db.execute(text("""
@@ -252,8 +262,9 @@ async def return_to_qa(
 ):
     """Editor 將訂單退回 qa_review 狀態"""
     res = await db.execute(text("""
-        SELECT id FROM orders 
-        WHERE id = :id AND (editor_id = :editor_id OR :is_admin = true) AND status = 'editor_verify'
+        SELECT o.id FROM orders o
+        LEFT JOIN assignments a ON a.order_id = o.id
+        WHERE o.id = :id AND (a.editor_id = :editor_id OR :is_admin = true) AND o.status = 'editor_verify'
     """), {"id": order_id, "editor_id": editor["user_id"], "is_admin": editor.get("is_admin", False)})
     if not res.fetchone():
         raise HTTPException(status_code=403, detail="Access denied or order not in editor_verify status")
@@ -311,7 +322,9 @@ async def assign_qa_to_order(
     """Editor 將其指派訂單再指派給 QA"""
     # 驗證該訂單是否指派給該 Editor
     res = await db.execute(text("""
-        SELECT id FROM orders WHERE id = :id AND (editor_id = :user_id OR :is_admin = true)
+        SELECT o.id FROM orders o
+        LEFT JOIN assignments a ON a.order_id = o.id
+        WHERE o.id = :id AND (a.editor_id = :user_id OR :is_admin = true)
     """), {"id": order_id, "user_id": editor["user_id"], "is_admin": editor.get("is_admin", False)})
     if not res.fetchone():
         raise HTTPException(status_code=403, detail="Access denied")
@@ -326,7 +339,7 @@ async def assign_qa_to_order(
             raise HTTPException(status_code=400, detail="User is not a QA or not found")
 
     await db.execute(text("""
-        UPDATE orders SET qa_id = :qa_id WHERE id = :id
+        UPDATE assignments SET qa_id = :qa_id WHERE order_id = :id
     """), {"qa_id": qa_id, "id": order_id})
     await db.commit()
     return MessageResponse(message="QA assigned by editor")
@@ -350,14 +363,15 @@ async def list_lt_assignments(
     if is_admin:
         where = ""
     else:
-        where = "WHERE la.editor_id = :user_id OR la.proofreader_id = :user_id"
+        where = "WHERE la.editor_id = :user_id OR la.proofreader_id = :user_id OR la.qa_id = :user_id"
 
     result = await db.execute(text(f"""
         SELECT
-            la.id, la.order_id, la.editor_id, la.proofreader_id,
+            la.id, la.order_id, la.editor_id, la.qa_id, la.proofreader_id,
             la.status, la.assigned_at,
-            la.editor_submitted_at, la.proofread_submitted_at
-        FROM literary_assignments la
+            la.editor_submitted_at, la.proofread_submitted_at, la.qa_submitted_at,
+            la.editor_notes, la.proofreader_notes
+        FROM assignments la
         {where}
         ORDER BY la.assigned_at DESC
         LIMIT :limit OFFSET :offset
@@ -367,7 +381,7 @@ async def list_lt_assignments(
     assignments = [AssignmentResponse(**dict(r._mapping)) for r in rows]
 
     count_result = await db.execute(text(f"""
-        SELECT COUNT(*) FROM literary_assignments la {where}
+        SELECT COUNT(*) FROM assignments la {where}
     """), {"user_id": user["user_id"]} if not is_admin else {})
     total = count_result.scalar() or 0
 
@@ -386,14 +400,14 @@ async def get_lt_order(
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
             o.word_count, o.price_ntd, o.title, o.notes,
             o.created_at, o.deadline_at, o.delivered_at,
-            o.gcs_output_path, o.editor_id, o.qa_id,
+            o.gcs_output_path, a.editor_id, a.qa_id,
             p.payment_status, p.invoice_no
         FROM orders o
         LEFT JOIN payments p ON p.order_id = o.id
-        JOIN literary_assignments la ON la.order_id = o.id
+        JOIN assignments a ON a.order_id = o.id
         WHERE o.id = :id
           AND o.track_type = 'literary'
-          AND (la.editor_id = :user_id OR la.proofreader_id = :user_id
+          AND (a.editor_id = :user_id OR a.proofreader_id = :user_id OR a.qa_id = :user_id
                OR :is_admin = true)
     """), {
         "id":        order_id,
@@ -417,10 +431,10 @@ async def get_lt_order_segments(
     """Get segments for a Literary Track order assigned to the current user."""
     # 1. Verify assignment
     res = await db.execute(text("""
-        SELECT la.status FROM literary_assignments la
-        JOIN orders o ON o.id = la.order_id
+        SELECT a.status FROM assignments a
+        JOIN orders o ON o.id = a.order_id
         WHERE o.id = :id AND o.track_type = 'literary'
-          AND (la.editor_id = :user_id OR la.proofreader_id = :user_id
+          AND (a.editor_id = :user_id OR a.proofreader_id = :user_id OR a.qa_id = :user_id
                OR :is_admin = true)
     """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
     assignment = res.fetchone()
@@ -466,10 +480,10 @@ async def update_lt_order_segments(
     """Save draft edits for a Literary Track order."""
     # 1. Verify assignment
     res = await db.execute(text("""
-        SELECT la.status FROM literary_assignments la
-        JOIN orders o ON o.id = la.order_id
+        SELECT a.status FROM assignments a
+        JOIN orders o ON o.id = a.order_id
         WHERE o.id = :id AND o.track_type = 'literary'
-          AND (la.editor_id = :user_id OR la.proofreader_id = :user_id
+          AND (a.editor_id = :user_id OR a.proofreader_id = :user_id OR a.qa_id = :user_id
                OR :is_admin = true)
     """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
     if not res.fetchone():
@@ -505,11 +519,11 @@ async def complete_lt_assignment(
     """
     # 1. Get assignment
     res = await db.execute(text("""
-        SELECT la.status, la.editor_id, la.proofreader_id
-        FROM literary_assignments la
-        JOIN orders o ON o.id = la.order_id
+        SELECT a.status, a.editor_id, a.proofreader_id
+        FROM assignments a
+        JOIN orders o ON o.id = a.order_id
         WHERE o.id = :id AND o.track_type = 'literary'
-          AND (la.editor_id = :user_id OR la.proofreader_id = :user_id
+          AND (a.editor_id = :user_id OR a.proofreader_id = :user_id OR a.qa_id = :user_id
                OR :is_admin = true)
     """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
     assignment = res.fetchone()
@@ -525,7 +539,7 @@ async def complete_lt_assignment(
                 detail=f"Editor can only complete when status is 'editing', got '{assignment.status}'"
             )
         await db.execute(text("""
-            UPDATE literary_assignments
+            UPDATE assignments
             SET status = 'editor_done',
                 editor_submitted_at = NOW(),
                 editor_completed_at = NOW()
@@ -538,7 +552,7 @@ async def complete_lt_assignment(
                 detail=f"Proofreader can only complete when status is 'proofreading' or 'editor_done', got '{assignment.status}'"
             )
         await db.execute(text("""
-            UPDATE literary_assignments
+            UPDATE assignments
             SET status = 'proofread_done',
                 proofread_submitted_at = NOW(),
                 proofreader_completed_at = NOW()

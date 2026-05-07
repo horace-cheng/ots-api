@@ -129,12 +129,13 @@ class OrderDetail(BaseModel):
     invoice_no:      Optional[str]
     gcs_output_path: Optional[str]
     gcs_upload_path: Optional[str] = None
-    editor_id:       Optional[UUIDStr] = None
-    qa_id:           Optional[UUIDStr] = None
-    qa_submitted_at: Optional[datetime] = None
 
 class AdminOrderDetail(OrderDetail):
     qa_result: Optional[dict] = None
+    editor_id: Optional[UUIDStr] = None
+    qa_id:     Optional[UUIDStr] = None
+    proofreader_id: Optional[UUIDStr] = None
+    assignment_status: Optional[str] = None
 
 class OrderListResponse(BaseModel):
     orders: List[OrderDetail]
@@ -225,11 +226,15 @@ class AssignmentResponse(BaseModel):
     id:                     UUIDStr
     order_id:               UUIDStr
     editor_id:              Optional[UUIDStr]
+    qa_id:                  Optional[UUIDStr] = None
     proofreader_id:         Optional[UUIDStr]
     status:                 str
     assigned_at:            datetime
     editor_submitted_at:    Optional[datetime]
     proofread_submitted_at: Optional[datetime]
+    qa_submitted_at:        Optional[datetime] = None
+    editor_notes:           Optional[str] = None
+    proofreader_notes:      Optional[str] = None
 
 
 class QAFlagListResponse(BaseModel):
