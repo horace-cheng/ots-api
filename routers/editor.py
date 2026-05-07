@@ -5,7 +5,7 @@ Editor Dashboard 端點。
 獲取指派訂單、編輯段落、儲存草稿、提交或退回 QA。
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import logging
@@ -391,11 +391,17 @@ async def list_lt_assignments(
 @router.get("/lt/orders/{order_id}", response_model=OrderDetail)
 async def get_lt_order(
     order_id: str,
-    user:   dict       = Depends(get_lt_user),
-    db:     AsyncSession = Depends(get_db),
+    role:     str        = Query("editor"),
+    user:     dict       = Depends(get_lt_user),
+    db:       AsyncSession = Depends(get_db),
 ):
-    """Get Literary Track order details if the user is assigned as editor or proofreader."""
-    result = await db.execute(text("""
+    """Get Literary Track order details. role=editor checks editor_id, role=proofreader checks proofreader_id."""
+    if role == "proofreader":
+        where_clause = "a.proofreader_id = :user_id OR :is_admin = true"
+    else:
+        where_clause = "a.editor_id = :user_id OR :is_admin = true"
+
+    result = await db.execute(text(f"""
         SELECT
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
             o.word_count, o.price_ntd, o.title, o.notes,
@@ -407,8 +413,7 @@ async def get_lt_order(
         JOIN assignments a ON a.order_id = o.id
         WHERE o.id = :id
           AND o.track_type = 'literary'
-          AND (a.editor_id = :user_id OR a.proofreader_id = :user_id OR a.qa_id = :user_id
-               OR :is_admin = true)
+          AND ({where_clause})
     """), {
         "id":        order_id,
         "user_id":   user["user_id"],
@@ -425,18 +430,23 @@ async def get_lt_order(
 @router.get("/lt/orders/{order_id}/segments", response_model=QASegmentListResponse)
 async def get_lt_order_segments(
     order_id: str,
+    role:     str        = Query("editor"),
     user:     dict       = Depends(get_lt_user),
     db:       AsyncSession = Depends(get_db),
 ):
     """Get segments for a Literary Track order assigned to the current user."""
+    if role == "proofreader":
+        where_clause = "a.proofreader_id = :user_id OR :is_admin = true"
+    else:
+        where_clause = "a.editor_id = :user_id OR :is_admin = true"
+
     # 1. Verify assignment
-    res = await db.execute(text("""
+    res = await db.execute(text(f("""
         SELECT a.status FROM assignments a
         JOIN orders o ON o.id = a.order_id
         WHERE o.id = :id AND o.track_type = 'literary'
-          AND (a.editor_id = :user_id OR a.proofreader_id = :user_id OR a.qa_id = :user_id
-               OR :is_admin = true)
-    """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+          AND ({where_clause})
+    """)), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
     assignment = res.fetchone()
     if not assignment:
         raise HTTPException(status_code=403, detail="Access denied")
@@ -473,19 +483,24 @@ async def get_lt_order_segments(
 @router.patch("/lt/orders/{order_id}/segments", response_model=MessageResponse)
 async def update_lt_order_segments(
     order_id: str,
-    body:     QASegmentsBatchUpdate,
+    role:     str                 = Query("editor"),
+    body:     QASegmentsBatchUpdate = ...,
     user:     dict       = Depends(get_lt_user),
     db:       AsyncSession = Depends(get_db),
 ):
     """Save draft edits for a Literary Track order."""
+    if role == "proofreader":
+        where_clause = "a.proofreader_id = :user_id OR :is_admin = true"
+    else:
+        where_clause = "a.editor_id = :user_id OR :is_admin = true"
+
     # 1. Verify assignment
-    res = await db.execute(text("""
+    res = await db.execute(text(f("""
         SELECT a.status FROM assignments a
         JOIN orders o ON o.id = a.order_id
         WHERE o.id = :id AND o.track_type = 'literary'
-          AND (a.editor_id = :user_id OR a.proofreader_id = :user_id OR a.qa_id = :user_id
-               OR :is_admin = true)
-    """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+          AND ({where_clause})
+    """)), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
     if not res.fetchone():
         raise HTTPException(status_code=403, detail="Access denied")
 
@@ -509,6 +524,7 @@ async def update_lt_order_segments(
 @router.post("/lt/orders/{order_id}/complete", response_model=MessageResponse)
 async def complete_lt_assignment(
     order_id: str,
+    role:     str        = Query("editor"),
     user:     dict       = Depends(get_lt_user),
     db:       AsyncSession = Depends(get_db),
 ):
@@ -517,22 +533,23 @@ async def complete_lt_assignment(
     - Editor completes: editing → editor_done
     - Proofreader completes: proofreading → proofread_done
     """
+    if role == "proofreader":
+        where_clause = "a.proofreader_id = :user_id OR :is_admin = true"
+    else:
+        where_clause = "a.editor_id = :user_id OR :is_admin = true"
+
     # 1. Get assignment
-    res = await db.execute(text("""
-        SELECT a.status, a.editor_id, a.proofreader_id
-        FROM assignments a
+    res = await db.execute(text(f("""
+        SELECT a.status FROM assignments a
         JOIN orders o ON o.id = a.order_id
         WHERE o.id = :id AND o.track_type = 'literary'
-          AND (a.editor_id = :user_id OR a.proofreader_id = :user_id OR a.qa_id = :user_id
-               OR :is_admin = true)
-    """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+          AND ({where_clause})
+    """)), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
     assignment = res.fetchone()
     if not assignment:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    is_editor = user.get("is_editor") or user.get("is_admin")
-
-    if is_editor:
+    if role == "editor":
         if assignment.status not in ("editing", "editor_done"):
             raise HTTPException(
                 status_code=400,
