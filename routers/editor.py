@@ -441,12 +441,12 @@ async def get_lt_order_segments(
         where_clause = "a.editor_id = :user_id OR :is_admin = true"
 
     # 1. Verify assignment
-    res = await db.execute(text(f("""
+    res = await db.execute(text(f"""
         SELECT a.status FROM assignments a
         JOIN orders o ON o.id = a.order_id
         WHERE o.id = :id AND o.track_type = 'literary'
           AND ({where_clause})
-    """)), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+    """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
     assignment = res.fetchone()
     if not assignment:
         raise HTTPException(status_code=403, detail="Access denied")
@@ -495,12 +495,12 @@ async def update_lt_order_segments(
         where_clause = "a.editor_id = :user_id OR :is_admin = true"
 
     # 1. Verify assignment
-    res = await db.execute(text(f("""
+    res = await db.execute(text(f"""
         SELECT a.status FROM assignments a
         JOIN orders o ON o.id = a.order_id
         WHERE o.id = :id AND o.track_type = 'literary'
           AND ({where_clause})
-    """)), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+    """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
     if not res.fetchone():
         raise HTTPException(status_code=403, detail="Access denied")
 
@@ -539,12 +539,12 @@ async def complete_lt_assignment(
         where_clause = "a.editor_id = :user_id OR :is_admin = true"
 
     # 1. Get assignment
-    res = await db.execute(text(f("""
+    res = await db.execute(text(f"""
         SELECT a.status FROM assignments a
         JOIN orders o ON o.id = a.order_id
         WHERE o.id = :id AND o.track_type = 'literary'
           AND ({where_clause})
-    """)), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+    """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
     assignment = res.fetchone()
     if not assignment:
         raise HTTPException(status_code=403, detail="Access denied")
