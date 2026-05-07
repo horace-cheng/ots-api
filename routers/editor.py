@@ -6,6 +6,7 @@ Editor Dashboard 端點。
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import logging
@@ -530,15 +531,15 @@ async def complete_lt_assignment(
 ):
     """
     Mark Literary Track work as complete.
-    - Editor completes: editing → editor_done
-    - Proofreader completes: proofreading → proofread_done
+    - Editor from editing → editor_done (first completion)
+    - Editor from revision_needed → proofreading (back to proofreader for re-review)
+    - Proofreader from proofreading → proofread_done (final delivery)
     """
     if role == "proofreader":
         where_clause = "a.proofreader_id = :user_id OR :is_admin = true"
     else:
         where_clause = "a.editor_id = :user_id OR :is_admin = true"
 
-    # 1. Get assignment
     res = await db.execute(text(f"""
         SELECT a.status FROM assignments a
         JOIN orders o ON o.id = a.order_id
@@ -550,10 +551,18 @@ async def complete_lt_assignment(
         raise HTTPException(status_code=403, detail="Access denied")
 
     if role == "editor":
+        if assignment.status == "revision_needed":
+            await db.execute(text("""
+                UPDATE assignments
+                SET status = 'proofreading'
+                WHERE order_id = :id
+            """), {"id": order_id})
+            await db.commit()
+            return MessageResponse(message="Revision submitted, sent back to proofreader for re-review")
         if assignment.status not in ("editing", "editor_done"):
             raise HTTPException(
                 status_code=400,
-                detail=f"Editor can only complete when status is 'editing', got '{assignment.status}'"
+                detail=f"Editor can only complete when status is 'editing' or 'revision_needed', got '{assignment.status}'"
             )
         if assignment.status == "editor_done":
             return MessageResponse(message="Assignment already completed")
@@ -565,13 +574,11 @@ async def complete_lt_assignment(
             WHERE order_id = :id
         """), {"id": order_id})
     else:
-        if assignment.status not in ("proofreading", "editor_done"):
+        if assignment.status != "proofreading":
             raise HTTPException(
                 status_code=400,
                 detail=f"Proofreader can only complete when status is 'proofreading', got '{assignment.status}'"
             )
-        if assignment.status == "proofread_done":
-            return MessageResponse(message="Assignment already completed")
         await db.execute(text("""
             UPDATE assignments
             SET status = 'proofread_done',
@@ -582,3 +589,52 @@ async def complete_lt_assignment(
 
     await db.commit()
     return MessageResponse(message="Assignment completed")
+
+
+class RejectRequest(BaseModel):
+    notes: str = Field(..., min_length=1, max_length=2000, description="Rejection notes")
+
+
+@router.post("/lt/orders/{order_id}/reject", response_model=MessageResponse)
+async def reject_lt_assignment(
+    order_id: str,
+    role:     str        = Query("proofreader"),
+    body:     RejectRequest = ...,
+    user:     dict       = Depends(get_lt_user),
+    db:       AsyncSession = Depends(get_db),
+):
+    """
+    Proofreader rejects work and sends back to editor for revision.
+    - Only allowed when assignment.status == 'proofreading'
+    - Updates status to 'revision_needed' with proofreader_notes
+    """
+    if role == "proofreader":
+        where_clause = "a.proofreader_id = :user_id OR :is_admin = true"
+    else:
+        where_clause = "a.editor_id = :user_id OR :is_admin = true"
+
+    res = await db.execute(text(f"""
+        SELECT a.status FROM assignments a
+        JOIN orders o ON o.id = a.order_id
+        WHERE o.id = :id AND o.track_type = 'literary'
+          AND ({where_clause})
+    """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+    assignment = res.fetchone()
+    if not assignment:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if assignment.status != "proofreading":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Can only reject when status is 'proofreading', got '{assignment.status}'"
+        )
+
+    await db.execute(text("""
+        UPDATE assignments
+        SET status = 'revision_needed',
+            proofreader_notes = :notes
+        WHERE order_id = :id
+    """), {"id": order_id, "notes": body.notes})
+
+    await db.commit()
+    return MessageResponse(message="Assignment rejected, sent back for revision")
