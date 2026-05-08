@@ -316,6 +316,8 @@ async def confirm_support_upload(
 
     logger.info(f"Support file confirmed: order={order_id}, file={filename}, role={file_role}")
 
+    await db.commit()
+
     return SupportFileResponse(**dict(file_row._mapping))
 
 

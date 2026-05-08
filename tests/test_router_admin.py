@@ -1229,3 +1229,66 @@ class TestAdminRetranslate:
         assert "re-triggered" in resp.json()["message"]
         mock_db.commit.assert_awaited()
         mock_trigger.assert_awaited_once_with("order-001")
+
+
+class TestAdminSupportFiles:
+    def test_list_empty_when_no_files(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchall.return_value = []
+
+        resp = admin_client.get("/admin/orders/order-001/support-files")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["files"] == []
+        assert data["total"] == 0
+
+    def test_list_returns_files(self, admin_client, mock_db):
+        row = MagicMock()
+        row._mapping = {
+            "id": "file-001",
+            "order_id": "order-001",
+            "filename": "glossary.pdf",
+            "content_type": "application/pdf",
+            "file_size": 12345,
+            "gcs_path": "orders/order-001/support/glossary.pdf",
+            "file_role": "glossary",
+            "created_at": "2026-05-09T00:00:00Z",
+        }
+        mock_db.execute.return_value.fetchall.return_value = [row]
+
+        resp = admin_client.get("/admin/orders/order-001/support-files")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["files"]) == 1
+        assert data["total"] == 1
+        assert data["files"][0]["filename"] == "glossary.pdf"
+        assert data["files"][0]["file_role"] == "glossary"
+
+    def test_get_content_returns_html(self, admin_client, mock_db):
+        row = MagicMock()
+        row.gcs_path = "orders/order-001/support/doc.txt"
+        row.filename = "doc.txt"
+        row.content_type = "text/plain"
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        with patch("routers.admin.read_blob") as mock_read:
+            mock_read.return_value = (b"Hello World", "doc.txt")
+            with patch("routers.admin.convert_document") as mock_convert:
+                mock_convert.return_value = MagicMock(
+                    filename="doc.txt",
+                    content_type="text/plain",
+                    html="<pre>Hello World</pre>",
+                )
+                resp = admin_client.get("/admin/orders/order-001/support-files/file-001/content")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["html"] == "<pre>Hello World</pre>"
+
+    def test_get_content_not_found(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+
+        resp = admin_client.get("/admin/orders/order-001/support-files/nonexistent/content")
+
+        assert resp.status_code == 404

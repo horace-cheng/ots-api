@@ -262,3 +262,49 @@ class TestGetDownloadUrl:
         data = resp.json()
         assert data["signed_url"] == SIGNED_URL
         assert data["expires_in"] == 3600
+
+
+# ── POST /files/{order_id}/support-confirm ──────────────────────────────────
+
+class TestConfirmSupportUpload:
+    def test_success_commits_and_returns_file(self, files_client, mock_db):
+        order_row = MagicMock()
+        file_row = MagicMock()
+        file_row._mapping = {
+            "id": "file-001",
+            "order_id": "order-001",
+            "filename": "glossary.pdf",
+            "content_type": "application/pdf",
+            "file_size": 12345,
+            "gcs_path": "orders/order-001/support/glossary.pdf",
+            "file_role": "glossary",
+            "created_at": "2026-05-09T00:00:00Z",
+        }
+        mock_db.execute.return_value.fetchone.side_effect = [order_row, file_row]
+
+        resp = files_client.post("/files/order-001/support-confirm", params={
+            "filename": "glossary.pdf",
+            "content_type": "application/pdf",
+            "file_size": 12345,
+            "gcs_path": "orders/order-001/support/glossary.pdf",
+            "file_role": "glossary",
+        })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["filename"] == "glossary.pdf"
+        assert data["file_role"] == "glossary"
+        mock_db.commit.assert_awaited_once()
+
+    def test_order_not_found_returns_404(self, files_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+
+        resp = files_client.post("/files/order-001/support-confirm", params={
+            "filename": "doc.txt",
+            "content_type": "text/plain",
+            "file_size": 100,
+            "gcs_path": "orders/order-001/support/doc.txt",
+            "file_role": "reference",
+        })
+
+        assert resp.status_code == 404
