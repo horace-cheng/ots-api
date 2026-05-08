@@ -9,6 +9,7 @@ services/payment/factory.py
   manual   → 手動匯款（Year 1 過渡，無需申請任何金流）
   ecpay    → 綠界科技（申請後啟用）
   payuni   → 統一金流（申請後啟用）
+  stripe   → Stripe（海外信用卡，需設定 STRIPE_SECRET_KEY）
 """
 
 from functools import lru_cache
@@ -32,6 +33,10 @@ def get_payment_gateway() -> PaymentGateway:
         from .payuni import PAYUNiGateway
         return PAYUNiGateway()
 
+    elif provider == "stripe":
+        from .stripe import StripeGateway
+        return StripeGateway()
+
     elif provider == "manual":
         from .manual import ManualPaymentGateway
         return ManualPaymentGateway()
@@ -39,5 +44,5 @@ def get_payment_gateway() -> PaymentGateway:
     else:
         raise ValueError(
             f"Unknown PAYMENT_GATEWAY: '{provider}'. "
-            f"Supported values: manual, ecpay, payuni"
+            f"Supported values: manual, ecpay, payuni, stripe"
         )

@@ -61,12 +61,15 @@ The payment layer is a strategy pattern designed so the router never imports any
 - **`manual.py`** — Year 1 fallback: no real gateway integration; generates a wire transfer instruction page URL. Invoice and refund raise errors (manual admin action required).
 - **`ecpay.py`** — ECPay (綠界) integration: SHA256 CheckMacValue signing, AIO checkout, e-invoice API.
 - **`payuni.py`** — PAYUNi (統一金流) integration: AES-256-CBC encrypted payload. Invoice and refund not yet implemented.
+- **`stripe.py`** — Stripe Checkout Sessions: creates payment links via Checkout API, parses `checkout.session.completed` webhook events. Invoice not supported (external system). Refund uses `stripe.Refund.create`.
 
-To add a new gateway: subclass `PaymentGateway` in a new file, implement all four methods, add a branch in `factory.py`.
+To add a new gateway: subclass `PaymentGateway` in a new file, implement all four methods, add a branch in `factory.py`, add env vars to `core/config.py`.
 
 ### Routers (`routers/`)
 
 - **`payments.py`** — currently the only wired-up router (others commented out in `main.py`). The webhook endpoint (`POST /payments/webhook`) parses the callback, updates `payments` and `orders` tables via raw SQL, triggers the translation pipeline via Pub/Sub (`trigger_pipeline`), then auto-issues a B2C invoice (failure is non-fatal — logged, not re-raised).
+
+**Stripe webhook note**: Unlike ECPay/PAYUNi (where the signature is in the form body), Stripe's signature verification requires the raw request body bytes and the `Stripe-Signature` header. The Stripe gateway's `parse_webhook()` expects an already-verified Stripe event dict — the router should call `stripe.Webhook.construct_event()` first.
 
 ### App lifecycle (`main.py`)
 

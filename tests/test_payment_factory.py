@@ -4,6 +4,7 @@ from services.payment.factory import get_payment_gateway
 from services.payment.manual import ManualPaymentGateway
 from services.payment.ecpay import ECPayGateway
 from services.payment.payuni import PAYUNiGateway
+from services.payment.stripe import StripeGateway
 
 
 @pytest.fixture(autouse=True)
@@ -28,8 +29,13 @@ def test_factory_payuni():
         assert isinstance(get_payment_gateway(), PAYUNiGateway)
 
 
-def test_factory_unknown_raises():
+def test_factory_stripe():
     with patch.dict("os.environ", {"PAYMENT_GATEWAY": "stripe"}):
+        assert isinstance(get_payment_gateway(), StripeGateway)
+
+
+def test_factory_unknown_raises():
+    with patch.dict("os.environ", {"PAYMENT_GATEWAY": "nonexistent"}):
         with pytest.raises(ValueError, match="Unknown PAYMENT_GATEWAY"):
             get_payment_gateway()
 

@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     # sandbox = True 時走測試環境
     ecpay_sandbox: bool    = os.environ.get("ECPAY_SANDBOX", "true").lower() == "true"
 
+    # ── Stripe 金流 ────────────────────────────────────────────────────────
+    stripe_secret_key: str      = os.environ.get("STRIPE_SECRET_KEY", "")
+    stripe_webhook_secret: str  = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+
     # ── GCP ───────────────────────────────────────────────────────────────
     project_id: str          = os.environ.get("PROJECT_ID", "ots-translation")
     env: str                 = os.environ.get("ENV", "dev")
