@@ -27,6 +27,7 @@ from models.schemas import (
     UserListItem, UserListResponse, UserUpdateRequest, UserLanguageUpdate, UserLanguage,
     QASegment, QASegmentListResponse, QASegmentsBatchUpdate,
     EditorAssignRequest,
+    SupportFileResponse, SupportFileListResponse,
 )
 from services.payment import (
     get_payment_gateway, InvoiceRequest, InvoiceType, InvoiceError
@@ -730,6 +731,49 @@ async def admin_get_original_content(
         raise HTTPException(status_code=404, detail="Original file not found in storage")
 
     doc = convert_document(raw_bytes, filename)
+    return OriginalContentResponse(filename=doc.filename, content_type=doc.content_type, html=doc.html)
+
+
+# ── Admin: 列出支援文件 ──────────────────────────────────────────────────────
+@router.get("/orders/{order_id}/support-files", response_model=SupportFileListResponse)
+async def admin_list_support_files(
+    order_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """列出訂單的參考文件"""
+    rows = await db.execute(text("""
+        SELECT sf.id, sf.order_id, sf.filename, sf.content_type,
+               sf.file_size, sf.gcs_path, sf.file_role, sf.created_at
+        FROM order_support_files sf
+        WHERE sf.order_id = :order_id
+        ORDER BY sf.created_at ASC
+    """), {"order_id": order_id})
+    files = [SupportFileResponse(**dict(r._mapping)) for r in rows.fetchall()]
+    return SupportFileListResponse(files=files, total=len(files))
+
+
+@router.get("/orders/{order_id}/support-files/{file_id}/content", response_model=OriginalContentResponse)
+async def admin_get_support_file_content(
+    order_id: str,
+    file_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """讀取特定支援檔案內容，轉換為 HTML"""
+    result = await db.execute(text("""
+        SELECT sf.gcs_path, sf.filename, sf.content_type
+        FROM order_support_files sf
+        WHERE sf.id = :file_id AND sf.order_id = :order_id
+    """), {"file_id": file_id, "order_id": order_id})
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Support file not found")
+    try:
+        raw_bytes, filename = read_blob(row.gcs_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Support file not found in storage")
+    doc = convert_document(raw_bytes, row.filename)
     return OriginalContentResponse(filename=doc.filename, content_type=doc.content_type, html=doc.html)
 
 
