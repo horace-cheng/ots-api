@@ -13,7 +13,7 @@ steps:
     args:
       - build
       - -t
-      - asia-east1-docker.pkg.dev/$PROJECT_ID/ots/api-backend:$COMMIT_SHA
+      - asia-east1-docker.pkg.dev/$PROJECT_ID/ots/api-backend:$BUILD_ID
       - -t
       - asia-east1-docker.pkg.dev/$PROJECT_ID/ots/api-backend:latest
       - .
@@ -32,7 +32,7 @@ steps:
       - run
       - deploy
       - ots-api-backend-$_ENV
-      - --image=asia-east1-docker.pkg.dev/$PROJECT_ID/ots/api-backend:$COMMIT_SHA
+      - --image=asia-east1-docker.pkg.dev/$PROJECT_ID/ots/api-backend:$BUILD_ID
       - --region=asia-east1
       - --service-account=ots-api-backend-$_ENV@$PROJECT_ID.iam.gserviceaccount.com
       - --add-cloudsql-instances=$PROJECT_ID:asia-east1:ots-db-$_ENV

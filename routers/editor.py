@@ -528,9 +528,25 @@ async def update_lt_order_segments(
     if not translations:
         raise HTTPException(status_code=404, detail="Translations not found")
 
+    must_fix_indices = set()
+    flags_res = await db.execute(text("""
+        SELECT DISTINCT qf.paragraph_index FROM qa_flags qf
+        JOIN pipeline_jobs pj ON pj.id = qf.job_id
+        WHERE pj.order_id = :order_id
+          AND qf.flag_level = 'must_fix'
+          AND qf.resolved = false
+    """), {"order_id": order_id})
+    for row in flags_res.fetchall():
+        must_fix_indices.add(row[0])
+
     trans_map = {t["index"]: t for t in translations}
     for up in body.segments:
         if up.index in trans_map:
+            if up.index in must_fix_indices and not (up.editor_comments or "").strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Segment {up.index + 1}: comments are required for flagged segments"
+                )
             trans_map[up.index]["translated"] = up.translated
             if up.comments is not None:
                 trans_map[up.index]["comments"] = up.comments
@@ -586,17 +602,40 @@ async def complete_lt_assignment(
         if assignment.status == "editor_done":
             return MessageResponse(message="Assignment already completed")
 
-        unresolved = await db.execute(text("""
-            SELECT COUNT(*) FROM qa_flags qf
+        translations = storage.read_temp_json(order_id, "translations.json")
+        if not translations:
+            raise HTTPException(status_code=404, detail="Translations not found")
+
+        trans_map = {t["index"]: t.get("editor_comments", "").strip() for t in translations}
+
+        must_fix_flags = await db.execute(text("""
+            SELECT qf.id, qf.paragraph_index FROM qa_flags qf
             JOIN pipeline_jobs pj ON pj.id = qf.job_id
             WHERE pj.order_id = :order_id
               AND qf.flag_level = 'must_fix'
               AND qf.resolved = false
         """), {"order_id": order_id})
-        if unresolved.scalar() > 0:
+        must_fix_rows = must_fix_flags.fetchall()
+
+        unresolved_without_comment = []
+        for row in must_fix_rows:
+            comment = trans_map.get(row.paragraph_index, "")
+            if comment:
+                await db.execute(text("""
+                    UPDATE qa_flags
+                    SET resolved = true,
+                        reviewer_note = COALESCE(reviewer_note, :comment),
+                        resolved_at = NOW()
+                    WHERE id = :flag_id
+                """), {"flag_id": row.id, "comment": comment})
+            else:
+                unresolved_without_comment.append(row.paragraph_index)
+
+        if unresolved_without_comment:
+            seg_nums = ", ".join(str(i + 1) for i in sorted(unresolved_without_comment))
             raise HTTPException(
                 status_code=400,
-                detail="Cannot complete: there are unresolved must-fix QA flags. Please resolve them first."
+                detail=f"Segments {seg_nums} have QA flags but no comments. Please add comments before completing."
             )
 
         await db.execute(text("""
