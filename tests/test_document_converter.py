@@ -47,6 +47,9 @@ class TestConvertMarkdown:
 
 
 class TestConvertDocx:
+    def setup_method(self):
+        pytest.importorskip("docx", reason="python-docx not installed (pip install python-docx)")
+
     def test_simple_docx(self):
         from docx import Document
         from io import BytesIO
@@ -76,6 +79,9 @@ class TestConvertDocx:
 
 
 class TestConvertPdf:
+    def setup_method(self):
+        pytest.importorskip("reportlab", reason="reportlab not installed (pip install reportlab)")
+
     def test_simple_pdf(self):
         from reportlab.pdfgen import canvas
         from io import BytesIO
