@@ -460,7 +460,26 @@ async def get_lt_order_segments(
     if not segments_raw or not translations:
         raise HTTPException(status_code=404, detail="Segments or translations not found")
 
-    # 3. Build response
+    # 3. Load QA flags from DB
+    result = await db.execute(text("""
+        SELECT qf.id, qf.job_id, pj.order_id,
+               qf.paragraph_index, qf.flag_level, qf.flag_type,
+               qf.source_segment, qf.translated_segment,
+               qf.reviewer_note, qf.resolved, qf.flagged_at
+        FROM qa_flags qf
+        JOIN pipeline_jobs pj ON pj.id = qf.job_id
+        WHERE pj.order_id = :order_id
+    """), {"order_id": order_id})
+    flags_rows = result.fetchall()
+
+    flags_map: dict[int, list] = {}
+    for r in flags_rows:
+        idx = r.paragraph_index
+        if idx not in flags_map:
+            flags_map[idx] = []
+        flags_map[idx].append(QAFlagResponse(**dict(r._mapping)))
+
+    # 4. Build response
     raw_map = {t["index"]: t["translated"] for t in trans_raw} if isinstance(trans_raw, list) else {}
     trans_map = {t["index"]: t for t in translations} if isinstance(translations, list) else {}
 
@@ -475,7 +494,7 @@ async def get_lt_order_segments(
             raw        = raw_map.get(idx),
             comments   = t.get("comments"),
             editor_comments = t.get("editor_comments"),
-            flags      = [],
+            flags      = flags_map.get(idx, []),
         ))
 
     return QASegmentListResponse(segments=res_segments)
@@ -566,6 +585,20 @@ async def complete_lt_assignment(
             )
         if assignment.status == "editor_done":
             return MessageResponse(message="Assignment already completed")
+
+        unresolved = await db.execute(text("""
+            SELECT COUNT(*) FROM qa_flags qf
+            JOIN pipeline_jobs pj ON pj.id = qf.job_id
+            WHERE pj.order_id = :order_id
+              AND qf.flag_level = 'must_fix'
+              AND qf.resolved = false
+        """), {"order_id": order_id})
+        if unresolved.scalar() > 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot complete: there are unresolved must-fix QA flags. Please resolve them first."
+            )
+
         await db.execute(text("""
             UPDATE assignments
             SET status = 'editor_done',
