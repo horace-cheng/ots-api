@@ -266,3 +266,116 @@ class TestListOrders:
 
         resp = orders_client.get("/orders", params={"limit": 5, "offset": 10})
         assert resp.status_code == 200
+
+
+class TestUpdateOrder:
+    def test_updates_title_successfully(self, orders_client, mock_db):
+        from datetime import datetime, timezone
+        order_row = MagicMock()
+        order_row.id = "order-001"
+        order_row.status = "paid"
+        order_row.delivered_at = None
+
+        updated_row = MagicMock()
+        updated_row._mapping = {
+            "id":              "order-001",
+            "track_type":      "fast",
+            "status":          "paid",
+            "source_lang":     "zh-tw",
+            "target_lang":     "en",
+            "word_count":      1000,
+            "price_ntd":       2000,
+            "quoted_price":    None,
+            "reference_price": None,
+            "title":           "New Title",
+            "notes":           None,
+            "created_at":      datetime(2026, 4, 27, tzinfo=timezone.utc),
+            "deadline_at":     None,
+            "delivered_at":    None,
+            "payment_status":  "paid",
+            "invoice_no":      None,
+            "gcs_output_path": None,
+        }
+
+        mock_db.execute.side_effect = [
+            MagicMock(fetchone=lambda: order_row),   # SELECT order
+            MagicMock(),                               # UPDATE title
+            MagicMock(fetchone=lambda: updated_row),  # SELECT updated order
+        ]
+
+        resp = orders_client.patch("/orders/order-001", json={"title": "New Title"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["title"] == "New Title"
+
+    def test_returns_404_if_order_not_found(self, orders_client, mock_db):
+        mock_db.execute.side_effect = [
+            MagicMock(fetchone=lambda: None),  # SELECT order — not found
+        ]
+
+        resp = orders_client.patch("/orders/nonexistent", json={"title": "New Title"})
+        assert resp.status_code == 404
+
+    def test_returns_400_if_delivered(self, orders_client, mock_db):
+        order_row = MagicMock()
+        order_row.id = "order-001"
+        order_row.status = "delivered"
+        order_row.delivered_at = None
+
+        mock_db.execute.side_effect = [
+            MagicMock(fetchone=lambda: order_row),
+        ]
+
+        resp = orders_client.patch("/orders/order-001", json={"title": "New Title"})
+        assert resp.status_code == 400
+
+    def test_returns_400_if_cancelled(self, orders_client, mock_db):
+        order_row = MagicMock()
+        order_row.id = "order-001"
+        order_row.status = "cancelled"
+        order_row.delivered_at = None
+
+        mock_db.execute.side_effect = [
+            MagicMock(fetchone=lambda: order_row),
+        ]
+
+        resp = orders_client.patch("/orders/order-001", json={"title": "New Title"})
+        assert resp.status_code == 400
+
+    def test_empty_title_clears_to_null(self, orders_client, mock_db):
+        from datetime import datetime, timezone
+        order_row = MagicMock()
+        order_row.id = "order-001"
+        order_row.status = "paid"
+        order_row.delivered_at = None
+
+        updated_row = MagicMock()
+        updated_row._mapping = {
+            "id":              "order-001",
+            "track_type":      "fast",
+            "status":          "paid",
+            "source_lang":     "zh-tw",
+            "target_lang":     "en",
+            "word_count":      1000,
+            "price_ntd":       2000,
+            "quoted_price":    None,
+            "reference_price": None,
+            "title":           None,
+            "notes":           None,
+            "created_at":      datetime(2026, 4, 27, tzinfo=timezone.utc),
+            "deadline_at":     None,
+            "delivered_at":    None,
+            "payment_status":  "paid",
+            "invoice_no":      None,
+            "gcs_output_path": None,
+        }
+
+        mock_db.execute.side_effect = [
+            MagicMock(fetchone=lambda: order_row),
+            MagicMock(),
+            MagicMock(fetchone=lambda: updated_row),
+        ]
+
+        resp = orders_client.patch("/orders/order-001", json={"title": ""})
+        assert resp.status_code == 200
+        assert resp.json()["title"] is None

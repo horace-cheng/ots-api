@@ -15,7 +15,7 @@ from core.database import get_db
 from core.config import settings
 from routers.auth import get_current_user
 from models.schemas import (
-    OrderCreate, OrderResponse, OrderDetail, OrderListResponse, MessageResponse, QuoteUpdate
+    OrderCreate, OrderUpdate, OrderResponse, OrderDetail, OrderListResponse, MessageResponse, QuoteUpdate
 )
 from services.payment import get_payment_gateway, PaymentRequest, PaymentMethod
 
@@ -267,3 +267,54 @@ async def cancel_order(
 
     logger.info(f"Order cancelled: {order_id}")
     return MessageResponse(message="Order cancelled")
+
+
+# ── PATCH /orders/{order_id} ────────────────────────────────────────────────────
+@router.patch("/{order_id}", response_model=OrderDetail)
+async def update_order(
+    order_id: str,
+    body: OrderUpdate,
+    user: dict         = Depends(get_current_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """
+    更新訂單標題。僅可在訂單交付前修改。
+    """
+    result = await db.execute(text("""
+        SELECT o.id, o.status, o.delivered_at FROM orders o
+        JOIN users u ON u.id = o.user_id
+        WHERE o.id = :order_id AND u.uid_firebase = :uid
+    """), {"order_id": order_id, "uid": user["uid"]})
+
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if row.status in ("delivered", "cancelled"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot update order with status '{row.status}'"
+        )
+
+    if body.title is not None:
+        title = body.title.strip() or None
+        await db.execute(text("""
+            UPDATE orders SET title = :title WHERE id = :order_id
+        """), {"title": title, "order_id": order_id})
+        await db.commit()
+        logger.info(f"Order title updated: {order_id} → {title!r}")
+
+    # Return updated order
+    result = await db.execute(text("""
+        SELECT
+            o.id, o.track_type, o.status, o.source_lang, o.target_lang,
+            o.word_count, o.price_ntd, o.quoted_price, o.reference_price, o.title, o.notes,
+            o.created_at, o.deadline_at, o.delivered_at,
+            o.gcs_output_path,
+            p.payment_status, p.invoice_no
+        FROM orders o
+        JOIN users u ON u.id = o.user_id
+        LEFT JOIN payments p ON p.order_id = o.id
+        WHERE o.id = :order_id AND u.uid_firebase = :uid
+    """), {"order_id": order_id, "uid": user["uid"]})
+
+    return OrderDetail(**dict(result.fetchone()._mapping))

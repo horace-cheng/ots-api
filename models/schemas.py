@@ -101,6 +101,9 @@ class OrderCreate(BaseModel):
             raise ValueError("source_lang and target_lang must be different")
         return v
 
+class OrderUpdate(BaseModel):
+    title: Optional[str] = Field(None, max_length=50, description="訂單標題")
+
 class OrderResponse(BaseModel):
     order_id:    str
     status:      str
