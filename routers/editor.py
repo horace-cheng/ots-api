@@ -178,6 +178,7 @@ async def get_assigned_order_segments(
             raw             = raw_map.get(idx),
             comments        = t.get("comments"),
             editor_comments = t.get("editor_comments"),
+            proofreader_comments = t.get("proofreader_comments"),
             flags           = flags_map.get(idx, []),
         ))
 
@@ -494,6 +495,7 @@ async def get_lt_order_segments(
             raw        = raw_map.get(idx),
             comments   = t.get("comments"),
             editor_comments = t.get("editor_comments"),
+            proofreader_comments = t.get("proofreader_comments"),
             flags      = flags_map.get(idx, []),
         ))
 
@@ -542,7 +544,7 @@ async def update_lt_order_segments(
     trans_map = {t["index"]: t for t in translations}
     for up in body.segments:
         if up.index in trans_map:
-            if up.index in must_fix_indices and not (up.editor_comments or "").strip():
+            if role == "editor" and up.index in must_fix_indices and not (up.editor_comments or "").strip():
                 raise HTTPException(
                     status_code=400,
                     detail=f"Segment {up.index + 1}: comments are required for flagged segments"
@@ -552,6 +554,8 @@ async def update_lt_order_segments(
                 trans_map[up.index]["comments"] = up.comments
             if up.editor_comments is not None:
                 trans_map[up.index]["editor_comments"] = up.editor_comments
+            if up.proofreader_comments is not None:
+                trans_map[up.index]["proofreader_comments"] = up.proofreader_comments
 
     storage.write_temp_json(order_id, "translations.json", list(trans_map.values()))
     return MessageResponse(message="Segments updated")

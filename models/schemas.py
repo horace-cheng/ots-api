@@ -289,6 +289,7 @@ class QASegment(BaseModel):
     raw:            Optional[str] = None
     comments:       Optional[str] = None
     editor_comments: Optional[str] = None
+    proofreader_comments: Optional[str] = None
     flags:          List[QAFlagResponse] = []
 
 class QASegmentListResponse(BaseModel):
@@ -299,6 +300,7 @@ class QASegmentUpdate(BaseModel):
     translated: str
     comments:   Optional[str] = None
     editor_comments: Optional[str] = None
+    proofreader_comments: Optional[str] = None
 
 class QASegmentsBatchUpdate(BaseModel):
     segments: List[QASegmentUpdate]
