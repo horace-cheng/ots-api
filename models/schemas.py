@@ -163,7 +163,7 @@ class DownloadUrlResponse(BaseModel):
 class OriginalContentResponse(BaseModel):
     filename: str
     content_type: str
-    text: str
+    html: str
 
 
 # ── Pipeline Job ──────────────────────────────────────────────────────────────

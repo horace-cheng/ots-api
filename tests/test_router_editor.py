@@ -55,6 +55,7 @@ class TestEditorListOrders:
             "payment_status": "paid",
             "invoice_no": None
         }
+        mock_db.execute.return_value.scalar.return_value = 1
         mock_db.execute.return_value.fetchall.return_value = [row]
         
         resp = editor_client.get("/editor/orders", headers={"Authorization": "Bearer dummy"})
@@ -356,6 +357,7 @@ class TestQaAccessSharedEndpoints:
             "payment_status": "paid",
             "invoice_no": None
         }
+        mock_db.execute.return_value.scalar.return_value = 1
         mock_db.execute.return_value.fetchall.return_value = [row]
 
         client = self._make_qa_app(mock_db)

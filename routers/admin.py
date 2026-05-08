@@ -10,11 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from datetime import datetime, timezone
-import io, logging
+import logging
 
 from core.database import get_db
 from core import storage
-from core.storage import generate_download_signed_url, read_upload_raw
+from core.storage import generate_download_signed_url, read_blob
+from services.document_converter import convert_document
 from routers.auth import get_admin_user
 from models.schemas import (
     QAFlagResponse, QAFlagListResponse, QAFlagResolve,
@@ -713,67 +714,23 @@ async def admin_get_original_content(
     db:   AsyncSession = Depends(get_db),
 ):
     """
-    從 GCS 讀取客戶上傳的原始檔案，提取文字內容供審查員對照。
+    從 GCS 讀取客戶上傳的原始檔案，轉換為 HTML 供審查員對照。
     不產生 signed URL，檔案不離開伺服器。
     """
-    try:
-        raw_bytes, filename = read_upload_raw(order_id)
-    except FileNotFoundError:
+    result = await db.execute(text("""
+        SELECT gcs_upload_path FROM orders WHERE id = :order_id
+    """), {"order_id": order_id})
+    row = result.fetchone()
+    if not row or not row.gcs_upload_path:
         raise HTTPException(status_code=404, detail="No original file found for this order")
 
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    try:
+        raw_bytes, filename = read_blob(row.gcs_upload_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Original file not found in storage")
 
-    if ext in ("txt", "md"):
-        try:
-            text = raw_bytes.decode("utf-8")
-        except UnicodeDecodeError:
-            text = raw_bytes.decode("big5", errors="replace")
-        return OriginalContentResponse(filename=filename, content_type=f"text/{ext}", text=text)
-
-    elif ext == "docx":
-        import zipfile
-        from xml.etree import ElementTree
-        try:
-            with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
-                doc_xml = zf.read("word/document.xml")
-                root = ElementTree.fromstring(doc_xml)
-            paragraphs = []
-            current = []
-            for elem in root.iter():
-                tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-                if tag == "p":
-                    t = "".join(current)
-                    if t.strip():
-                        paragraphs.append(t.strip())
-                    current = []
-                elif tag == "t" and elem.text:
-                    current.append(elem.text)
-            t = "".join(current)
-            if t.strip():
-                paragraphs.append(t.strip())
-            return OriginalContentResponse(filename=filename, content_type="application/docx", text="\n\n".join(paragraphs))
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"DOCX extraction failed: {e}")
-
-    elif ext == "pdf":
-        try:
-            from pypdf import PdfReader
-            reader = PdfReader(io.BytesIO(raw_bytes))
-            texts = []
-            for page in reader.pages:
-                page_text = page.extract_text() or ""
-                if page_text.strip():
-                    texts.append(page_text.strip())
-            return OriginalContentResponse(filename=filename, content_type="application/pdf", text="\n\n".join(texts))
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"PDF extraction failed: {e}")
-
-    else:
-        try:
-            text = raw_bytes.decode("utf-8")
-        except UnicodeDecodeError:
-            text = raw_bytes.decode("big5", errors="replace")
-        return OriginalContentResponse(filename=filename, content_type="text/plain", text=text)
+    doc = convert_document(raw_bytes, filename)
+    return OriginalContentResponse(filename=doc.filename, content_type=doc.content_type, html=doc.html)
 
 
 # ── Admin: 帳號管理 ───────────────────────────────────────────────────────────

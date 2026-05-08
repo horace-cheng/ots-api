@@ -126,3 +126,13 @@ def read_upload_raw(order_id: str) -> tuple[bytes, str]:
     # 取第一個（通常只有一個檔案）
     blob = blobs[0]
     return blob.download_as_bytes(), blob.name.split("/")[-1]
+
+
+def read_blob(gcs_path: str) -> tuple[bytes, str]:
+    """從 uploads bucket 讀取指定 blob。回傳 (raw_bytes, filename)。"""
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_uploads_bucket)
+    blob = bucket.blob(gcs_path)
+    if not blob.exists():
+        raise FileNotFoundError(f"Blob not found: {gcs_path}")
+    return blob.download_as_bytes(), gcs_path.split("/")[-1]
