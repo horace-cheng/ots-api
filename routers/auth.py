@@ -12,6 +12,7 @@ from sqlalchemy import text
 
 from core.database import get_db
 from core.firebase import verify_firebase_token
+from core.config import settings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -53,9 +54,9 @@ async def get_current_user(
     if not user_row:
         await db.execute(text("""
             INSERT INTO users (uid_firebase, email, client_type, disabled)
-            VALUES (:uid, :email, 'b2c', TRUE)
+            VALUES (:uid, :email, 'b2c', :disabled)
             ON CONFLICT (uid_firebase) DO NOTHING
-        """), {"uid": uid, "email": email})
+        """), {"uid": uid, "email": email, "disabled": settings.env == "dev"})
         await db.commit()
 
         result = await db.execute(text("""
