@@ -41,7 +41,7 @@ async def get_current_user(
     # 首次登入：自動建立 users 記錄；後續登入：同步 email 快取
     result = await db.execute(text("""
         SELECT 
-            u.id, u.client_type, u.disabled, 
+            u.id, u.client_type, u.disabled,
             array_agg(ur.role) FILTER (WHERE ur.role IS NOT NULL) as roles
         FROM users u 
         LEFT JOIN user_roles ur ON ur.user_id = u.id
@@ -52,15 +52,15 @@ async def get_current_user(
 
     if not user_row:
         await db.execute(text("""
-            INSERT INTO users (uid_firebase, email, client_type)
-            VALUES (:uid, :email, 'b2c')
+            INSERT INTO users (uid_firebase, email, client_type, disabled)
+            VALUES (:uid, :email, 'b2c', TRUE)
             ON CONFLICT (uid_firebase) DO NOTHING
         """), {"uid": uid, "email": email})
         await db.commit()
 
         result = await db.execute(text("""
             SELECT 
-                u.id, u.client_type, u.disabled, 
+                u.id, u.client_type, u.disabled,
                 array_agg(ur.role) FILTER (WHERE ur.role IS NOT NULL) as roles
             FROM users u 
             LEFT JOIN user_roles ur ON ur.user_id = u.id
@@ -77,7 +77,7 @@ async def get_current_user(
         await db.commit()
 
     if user_row.disabled:
-        raise HTTPException(status_code=403, detail="Account is disabled")
+        raise HTTPException(status_code=403, detail="Your account has not been activated yet. Please contact an administrator.")
 
     roles = user_row.roles or []
     return {

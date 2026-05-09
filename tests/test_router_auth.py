@@ -77,7 +77,7 @@ class TestGetCurrentUser:
             resp = client.get("/me", headers={"Authorization": "Bearer valid-token"})
 
         assert resp.status_code == 403
-        assert "disabled" in resp.json()["detail"]
+        assert "activated" in resp.json()["detail"].lower()
 
     def test_email_synced_on_subsequent_login(self, client, mock_db):
         mock_db.execute.return_value.fetchone.return_value = self._user_row()
