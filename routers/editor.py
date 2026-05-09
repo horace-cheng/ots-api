@@ -335,7 +335,11 @@ async def list_lt_assignments(
     user:   dict       = Depends(get_lt_user),
     db:     AsyncSession = Depends(get_db),
 ):
-    """列出當前使用者的 Literary Track 指派（editor / proofreader / qa）"""
+    """列出當前使用者的 Literary Track 指派（editor / proofreader / qa）
+    只顯示各角色進行中的任務，隱藏已完成狀態：
+      - editor: editing, revision_needed（隱藏 editor_done, proofread_done）
+      - proofreader: proofreading（隱藏 proofread_done）
+    """
     params: dict = {"user_id": user["user_id"], "limit": limit, "offset": offset}
 
     result = await db.execute(text("""
@@ -345,9 +349,9 @@ async def list_lt_assignments(
             la.editor_submitted_at, la.proofread_submitted_at, la.qa_submitted_at,
             la.editor_notes, la.proofreader_notes
         FROM assignments la
-        WHERE la.editor_id = :user_id
-           OR la.proofreader_id = :user_id
-           OR la.qa_id = :user_id
+        WHERE (la.editor_id = :user_id AND la.status IN ('editing', 'revision_needed'))
+           OR (la.proofreader_id = :user_id AND la.status = 'proofreading')
+           OR (la.qa_id = :user_id)
         ORDER BY la.assigned_at DESC
         LIMIT :limit OFFSET :offset
     """), params)
@@ -357,9 +361,9 @@ async def list_lt_assignments(
 
     count_result = await db.execute(text("""
         SELECT COUNT(*) FROM assignments la
-        WHERE la.editor_id = :user_id
-           OR la.proofreader_id = :user_id
-           OR la.qa_id = :user_id
+        WHERE (la.editor_id = :user_id AND la.status IN ('editing', 'revision_needed'))
+           OR (la.proofreader_id = :user_id AND la.status = 'proofreading')
+           OR (la.qa_id = :user_id)
     """), {"user_id": user["user_id"]})
     total = count_result.scalar()
 
