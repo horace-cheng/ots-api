@@ -404,6 +404,73 @@ async def get_lt_order(
     return OrderDetail(**dict(row._mapping))
 
 
+@router.get("/lt/orders/{order_id}/segments", response_model=QASegmentListResponse)
+async def get_lt_order_segments(
+    order_id: str,
+    role:     str        = Query("editor"),
+    user:     dict       = Depends(get_lt_user),
+    db:       AsyncSession = Depends(get_db),
+):
+    """獲取 Literary Track 訂單的段落資料 (editor 或 proofreader 呼叫)"""
+    if role == "proofreader":
+        where_clause = "a.proofreader_id = :user_id OR :is_admin = true"
+    else:
+        where_clause = "a.editor_id = :user_id OR :is_admin = true"
+
+    res = await db.execute(text(f"""
+        SELECT o.id FROM orders o
+        JOIN assignments a ON a.order_id = o.id
+        WHERE o.id = :id AND ({where_clause})
+    """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+    if not res.fetchone():
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    segments_raw = storage.read_temp_json(order_id, "segments.json")
+    translations = storage.read_temp_json(order_id, "translations.json")
+    trans_raw    = storage.read_temp_json(order_id, "translations_raw.json")
+
+    if not segments_raw or not translations:
+        raise HTTPException(status_code=404, detail="Segments or translations not found")
+
+    result = await db.execute(text("""
+        SELECT qf.id, qf.job_id, pj.order_id,
+               qf.paragraph_index, qf.flag_level, qf.flag_type,
+               qf.source_segment, qf.translated_segment,
+               qf.reviewer_note, qf.resolved, qf.flagged_at
+        FROM qa_flags qf
+        JOIN pipeline_jobs pj ON pj.id = qf.job_id
+        WHERE pj.order_id = :order_id
+    """), {"order_id": order_id})
+    flags_rows = result.fetchall()
+
+    flags_map: dict[int, list] = {}
+    for r in flags_rows:
+        idx = r.paragraph_index
+        if idx not in flags_map:
+            flags_map[idx] = []
+        flags_map[idx].append(QAFlagResponse(**dict(r._mapping)))
+
+    raw_map = {t["index"]: t["translated"] for t in trans_raw} if isinstance(trans_raw, list) else {}
+    trans_map = {t["index"]: t for t in translations} if isinstance(translations, list) else {}
+
+    res_segments = []
+    for s in segments_raw:
+        idx = s["index"]
+        t = trans_map.get(idx, {})
+        res_segments.append(QASegment(
+            index      = idx,
+            source     = s["text"],
+            translated = t.get("translated", ""),
+            raw        = raw_map.get(idx),
+            comments   = t.get("comments"),
+            editor_comments = t.get("editor_comments"),
+            proofreader_comments = t.get("proofreader_comments"),
+            flags      = flags_map.get(idx, []),
+        ))
+
+    return QASegmentListResponse(segments=res_segments)
+
+
 @router.patch("/lt/orders/{order_id}/segments", response_model=MessageResponse)
 async def update_lt_order_segments(
     order_id: str,
