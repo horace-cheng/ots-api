@@ -327,6 +327,45 @@ async def get_assigned_order_segments(
     return QASegmentListResponse(segments=res_segments)
 
 
+# ── Literary Track: Assignments ───────────────────────────────────────────────
+@router.get("/lt/assignments", response_model=AssignmentListResponse)
+async def list_lt_assignments(
+    limit:  int        = Query(50, ge=1, le=200),
+    offset: int        = Query(0, ge=0),
+    user:   dict       = Depends(get_lt_user),
+    db:     AsyncSession = Depends(get_db),
+):
+    """列出當前使用者的 Literary Track 指派（editor / proofreader / qa）"""
+    params: dict = {"user_id": user["user_id"], "limit": limit, "offset": offset}
+
+    result = await db.execute(text("""
+        SELECT
+            la.id, la.order_id, la.editor_id, la.qa_id, la.proofreader_id,
+            la.status, la.assigned_at,
+            la.editor_submitted_at, la.proofread_submitted_at, la.qa_submitted_at,
+            la.editor_notes, la.proofreader_notes
+        FROM assignments la
+        WHERE la.editor_id = :user_id
+           OR la.proofreader_id = :user_id
+           OR la.qa_id = :user_id
+        ORDER BY la.assigned_at DESC
+        LIMIT :limit OFFSET :offset
+    """), params)
+
+    rows = result.fetchall()
+    assignments = [AssignmentResponse(**dict(r._mapping)) for r in rows]
+
+    count_result = await db.execute(text("""
+        SELECT COUNT(*) FROM assignments la
+        WHERE la.editor_id = :user_id
+           OR la.proofreader_id = :user_id
+           OR la.qa_id = :user_id
+    """), {"user_id": user["user_id"]})
+    total = count_result.scalar()
+
+    return AssignmentListResponse(assignments=assignments, total=total)
+
+
 @router.patch("/lt/orders/{order_id}/segments", response_model=MessageResponse)
 async def update_lt_order_segments(
     order_id: str,
