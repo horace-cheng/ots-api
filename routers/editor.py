@@ -366,6 +366,44 @@ async def list_lt_assignments(
     return AssignmentListResponse(assignments=assignments, total=total)
 
 
+@router.get("/lt/orders/{order_id}", response_model=OrderDetail)
+async def get_lt_order(
+    order_id: str,
+    role:     str        = Query("editor"),
+    user:     dict       = Depends(get_lt_user),
+    db:       AsyncSession = Depends(get_db),
+):
+    """取得 Literary Track 訂單詳情（限指派給該使用者的訂單）"""
+    if role == "proofreader":
+        where_clause = "a.proofreader_id = :user_id OR :is_admin = true"
+    else:
+        where_clause = "a.editor_id = :user_id OR :is_admin = true"
+
+    result = await db.execute(text(f"""
+        SELECT
+            o.id, o.track_type, o.status, o.source_lang, o.target_lang,
+            o.word_count, o.price_ntd, o.quoted_price, o.reference_price,
+            o.title, o.notes,
+            o.created_at, o.deadline_at, o.delivered_at,
+            o.gcs_output_path, o.gcs_upload_path,
+            p.payment_status, p.invoice_no
+        FROM orders o
+        LEFT JOIN payments p ON p.order_id = o.id
+        JOIN assignments a ON a.order_id = o.id
+        WHERE o.id = :id AND ({where_clause})
+    """), {
+        "id":       order_id,
+        "user_id":  user["user_id"],
+        "is_admin": user.get("is_admin", False),
+    })
+
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found or access denied")
+
+    return OrderDetail(**dict(row._mapping))
+
+
 @router.patch("/lt/orders/{order_id}/segments", response_model=MessageResponse)
 async def update_lt_order_segments(
     order_id: str,
