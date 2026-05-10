@@ -12,7 +12,7 @@ import logging
 from core.database import get_db
 from routers.auth import get_current_user, get_admin_user, get_editor_user
 from models.schemas import (
-    UserProfileResponse, InvitationCreate, InvitationResponse, 
+    UserProfileResponse, UserProfileUpdate, InvitationCreate, InvitationResponse,
     InvitationAccept, MessageResponse
 )
 import uuid
@@ -31,6 +31,7 @@ async def get_me(
         SELECT 
             u.id, u.uid_firebase, u.client_type, 
             u.company_name, u.tax_id, u.invoice_carrier,
+            u.bio,
             u.created_at,
             array_agg(DISTINCT ur.role) FILTER (WHERE ur.role IS NOT NULL) as roles,
             json_agg(DISTINCT jsonb_build_object('source_lang', ul.source_lang, 'target_lang', ul.target_lang)) FILTER (WHERE ul.source_lang IS NOT NULL) as languages
@@ -41,6 +42,70 @@ async def get_me(
         GROUP BY u.id
     """), {"uid": user["uid"]})
     
+    row = result.fetchone()
+    data = dict(row._mapping)
+    roles = data.get("roles") or []
+    langs = data.get("languages") or []
+    return UserProfileResponse(
+        **{**data,
+           "roles":     roles,
+           "is_admin":  "admin" in roles,
+           "is_editor": "editor" in roles,
+           "is_qa":     "qa" in roles,
+           "languages": langs}
+    )
+
+
+@router.patch("/me", response_model=UserProfileResponse)
+async def update_me(
+    body: UserProfileUpdate,
+    user: dict         = Depends(get_current_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """更新當前使用者的個人資料（含 bio）"""
+    updates = []
+    params: dict = {"uid": user["uid"]}
+
+    if body.client_type is not None:
+        updates.append("client_type = :client_type")
+        params["client_type"] = body.client_type.value
+    if body.company_name is not None:
+        updates.append("company_name = :company_name")
+        params["company_name"] = body.company_name
+    if body.tax_id is not None:
+        updates.append("tax_id = :tax_id")
+        params["tax_id"] = body.tax_id
+    if body.invoice_carrier is not None:
+        updates.append("invoice_carrier = :invoice_carrier")
+        params["invoice_carrier"] = body.invoice_carrier
+    if body.bio is not None:
+        updates.append("bio = :bio")
+        params["bio"] = body.bio
+
+    if updates:
+        updates.append("updated_at = NOW()")
+        await db.execute(text(f"""
+            UPDATE users SET {', '.join(updates)}
+            WHERE uid_firebase = :uid
+        """), params)
+        await db.commit()
+
+    # Return updated profile
+    result = await db.execute(text("""
+        SELECT 
+            u.id, u.uid_firebase, u.client_type, 
+            u.company_name, u.tax_id, u.invoice_carrier,
+            u.bio,
+            u.created_at,
+            array_agg(DISTINCT ur.role) FILTER (WHERE ur.role IS NOT NULL) as roles,
+            json_agg(DISTINCT jsonb_build_object('source_lang', ul.source_lang, 'target_lang', ul.target_lang)) FILTER (WHERE ul.source_lang IS NOT NULL) as languages
+        FROM users u
+        LEFT JOIN user_roles ur ON ur.user_id = u.id
+        LEFT JOIN user_languages ul ON ul.user_id = u.id
+        WHERE u.uid_firebase = :uid
+        GROUP BY u.id
+    """), {"uid": user["uid"]})
+
     row = result.fetchone()
     data = dict(row._mapping)
     roles = data.get("roles") or []

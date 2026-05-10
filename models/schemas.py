@@ -51,10 +51,11 @@ class ClientType(str, Enum):
 
 # ── User ──────────────────────────────────────────────────────────────────────
 class UserProfileUpdate(BaseModel):
-    client_type:     ClientType
+    client_type:     Optional[ClientType] = None
     company_name:    Optional[str] = None
     tax_id:          Optional[str] = None
     invoice_carrier: Optional[str] = None
+    bio:             Optional[str] = None
 
     @model_validator(mode="after")
     def validate_b2b_fields(self):
@@ -74,6 +75,7 @@ class UserProfileResponse(BaseModel):
     is_qa:           bool
     roles:           List[str] = []
     languages:       List['UserLanguage'] = []
+    bio:             str = ""
     created_at:      datetime
 
 class UserLanguage(BaseModel):
@@ -86,12 +88,13 @@ class UserLanguageUpdate(BaseModel):
 
 # ── Order ─────────────────────────────────────────────────────────────────────
 class OrderCreate(BaseModel):
-    track_type:  TrackType
-    source_lang: LangCode
-    target_lang: LangCode
-    word_count:  int   = Field(..., gt=0, description="原文字數")
-    title:       Optional[str] = Field(None, max_length=50, description="訂單標題（選填，不填則自動產生）")
-    notes:       Optional[str] = Field(None, max_length=500)
+    track_type:      TrackType
+    source_lang:     LangCode
+    target_lang:     LangCode
+    word_count:      int   = Field(..., gt=0, description="原文字數")
+    title:           Optional[str] = Field(None, max_length=50, description="訂單標題（選填，不填則自動產生）")
+    notes:           Optional[str] = Field(None, max_length=500)
+    sample_package:  bool  = False
 
     @field_validator("target_lang")
     @classmethod
@@ -105,33 +108,35 @@ class OrderUpdate(BaseModel):
     title: Optional[str] = Field(None, max_length=50, description="訂單標題")
 
 class OrderResponse(BaseModel):
-    order_id:    str
-    status:      str
-    payment_url: str
-    track_type:  str
-    word_count:  int
-    price_ntd:   int
-    created_at:  datetime
+    order_id:            str
+    status:              str
+    payment_url:         str
+    track_type:          str
+    word_count:          int
+    price_ntd:           int
+    has_sample_package:  bool = False
+    created_at:          datetime
 
 class OrderDetail(BaseModel):
-    id:              UUIDStr
-    track_type:      str
-    status:          str
-    source_lang:     str
-    target_lang:     str
-    word_count:      int
-    price_ntd:       Optional[int]
-    quoted_price:    Optional[int] = None
-    reference_price: Optional[int] = None
-    title:           Optional[str]
-    notes:           Optional[str]
-    created_at:      datetime
-    deadline_at:     Optional[datetime]
-    delivered_at:    Optional[datetime]
-    payment_status:  Optional[str]
-    invoice_no:      Optional[str]
-    gcs_output_path: Optional[str]
-    gcs_upload_path: Optional[str] = None
+    id:                 UUIDStr
+    track_type:         str
+    status:             str
+    source_lang:        str
+    target_lang:        str
+    word_count:         int
+    price_ntd:          Optional[int]
+    quoted_price:       Optional[int] = None
+    reference_price:    Optional[int] = None
+    title:              Optional[str]
+    notes:              Optional[str]
+    has_sample_package: bool = False
+    created_at:         datetime
+    deadline_at:        Optional[datetime]
+    delivered_at:       Optional[datetime]
+    payment_status:     Optional[str]
+    invoice_no:         Optional[str]
+    gcs_output_path:    Optional[str]
+    gcs_upload_path:    Optional[str] = None
 
 class AdminOrderDetail(OrderDetail):
     qa_result: Optional[dict] = None
@@ -312,6 +317,45 @@ class QASegmentsBatchUpdate(BaseModel):
 class EditorAssignRequest(BaseModel):
     editor_id: Optional[str] = None
     qa_id:     Optional[str] = None
+
+
+# ── Sample Translation Package ────────────────────────────────────────────────
+class BookFactSheet(BaseModel):
+    title:      Optional[str] = None
+    author:     Optional[str] = None
+    publisher:  Optional[str] = None
+    pub_date:   Optional[str] = None
+    word_count: Optional[str] = None
+    category:   Optional[str] = None
+    sales:      Optional[str] = None
+
+
+class SamplePackageResponse(BaseModel):
+    id:              UUIDStr
+    order_id:        UUIDStr
+    status:          str
+    translator_bio:  str = ""
+    book_fact_sheet: dict = {}
+    synopsis:        str = ""
+    market_analysis: str = ""
+    notes:           Optional[str] = None
+    updated_at:      Optional[datetime] = None
+    updated_by:      Optional[UUIDStr] = None
+
+
+class SamplePackageUpdate(BaseModel):
+    translator_bio:  Optional[str] = None
+    book_fact_sheet: Optional[dict] = None
+    synopsis:        Optional[str] = None
+    market_analysis: Optional[str] = None
+    notes:           Optional[str] = None
+
+
+class SamplePackageGenerateResponse(BaseModel):
+    message:       str
+    translator_bio: str = ""
+    book_fact_sheet: dict = {}
+    synopsis:      str = ""
 
 
 # ── Support Files ─────────────────────────────────────────────────────────────

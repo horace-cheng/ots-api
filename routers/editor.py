@@ -23,6 +23,7 @@ from models.schemas import (
     AssignmentResponse, AssignmentListResponse,
     OriginalContentResponse,
     SupportFileResponse, SupportFileListResponse,
+    SamplePackageResponse, SamplePackageUpdate,
 )
 from services.document_converter import convert_document
 
@@ -799,3 +800,88 @@ async def lt_get_support_file_content(
         raise HTTPException(status_code=404, detail="Support file not found in storage")
     doc = convert_document(raw_bytes, row.filename)
     return OriginalContentResponse(filename=doc.filename, content_type=doc.content_type, html=doc.html)
+
+
+# ── Editor: Sample Translation Package ──────────────────────────────────────
+@router.get("/lt/orders/{order_id}/sample-package", response_model=SamplePackageResponse)
+async def lt_get_sample_package(
+    order_id: str,
+    user: dict         = Depends(get_lt_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Get Sample Translation Package for a Literary Track order."""
+    # Verify assignment
+    result = await db.execute(text("""
+        SELECT 1 FROM orders o
+        JOIN assignments a ON a.order_id = o.id
+        WHERE o.id = :order_id AND o.track_type = 'literary'
+          AND (a.editor_id = :user_id OR a.proofreader_id = :user_id OR :is_admin = true)
+    """), {"order_id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+    if not result.fetchone():
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    pkg = await db.execute(text("""
+        SELECT id, order_id, status, translator_bio, book_fact_sheet,
+               synopsis, market_analysis, notes, updated_at, updated_by
+        FROM order_sample_packages
+        WHERE order_id = :order_id
+    """), {"order_id": order_id})
+    row = pkg.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Sample package not found")
+
+    data = dict(row._mapping)
+    if isinstance(data.get("book_fact_sheet"), dict):
+        data["book_fact_sheet"] = {k: v for k, v in data["book_fact_sheet"].items() if v}
+
+    return SamplePackageResponse(**data)
+
+
+@router.patch("/lt/orders/{order_id}/sample-package", response_model=MessageResponse)
+async def lt_update_sample_package(
+    order_id: str,
+    body: SamplePackageUpdate,
+    user: dict         = Depends(get_lt_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Update Sample Translation Package content."""
+    # Verify assignment
+    result = await db.execute(text("""
+        SELECT 1 FROM orders o
+        JOIN assignments a ON a.order_id = o.id
+        WHERE o.id = :order_id AND o.track_type = 'literary'
+          AND (a.editor_id = :user_id OR a.proofreader_id = :user_id OR :is_admin = true)
+    """), {"order_id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+    if not result.fetchone():
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    updates = []
+    params: dict = {"order_id": order_id, "user_id": user["user_id"]}
+
+    if body.translator_bio is not None:
+        updates.append("translator_bio = :translator_bio")
+        params["translator_bio"] = body.translator_bio
+    if body.book_fact_sheet is not None:
+        updates.append("book_fact_sheet = :book_fact_sheet::jsonb")
+        params["book_fact_sheet"] = str(body.book_fact_sheet)
+    if body.synopsis is not None:
+        updates.append("synopsis = :synopsis")
+        params["synopsis"] = body.synopsis
+    if body.market_analysis is not None:
+        updates.append("market_analysis = :market_analysis")
+        params["market_analysis"] = body.market_analysis
+    if body.notes is not None:
+        updates.append("notes = :notes")
+        params["notes"] = body.notes
+
+    if updates:
+        updates.append("updated_at = NOW()")
+        updates.append("updated_by = :user_id")
+        await db.execute(text(f"""
+            UPDATE order_sample_packages
+            SET {', '.join(updates)}
+            WHERE order_id = :order_id
+        """), params)
+        await db.commit()
+
+    return MessageResponse(message="Sample package updated")

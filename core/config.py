@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     )    
     web_portal_url: str      = os.environ.get("WEB_PORTAL_URL", "http://localhost:3000")
 
+    # ── Gemini (試譯包 synopsis 生成) ──────────────────────────────────────
+    gemini_api_key: str = os.environ.get("GEMINI_API_KEY", "")
+
     class Config:
         # 允許從 .env 檔載入（本機開發用）
         env_file = ".env"

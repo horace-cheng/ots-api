@@ -43,6 +43,7 @@ steps:
       - --set-secrets=ECPAY_MERCHANT_ID=ots-ecpay-merchant-id-$_ENV:latest
       - --set-secrets=ECPAY_HASH_KEY=ots-ecpay-hash-key-$_ENV:latest
       - --set-secrets=ECPAY_HASH_IV=ots-ecpay-hash-iv-$_ENV:latest
+      - --set-secrets=GEMINI_API_KEY=ots-google-ai-key-$_ENV:latest
       - --set-env-vars=PROJECT_ID=$PROJECT_ID
       - --set-env-vars=SERVICE_ACCOUNT_EMAIL=ots-api-backend-$_ENV@$PROJECT_ID.iam.gserviceaccount.com      
       - --set-env-vars=INTERNAL_ALLOWED_SA=ots-workflow-$_ENV@$PROJECT_ID.iam.gserviceaccount.com
