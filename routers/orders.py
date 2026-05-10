@@ -361,9 +361,6 @@ async def generate_sample_package(
         raise HTTPException(status_code=404, detail="Order not found")
     if not order.has_sample_package:
         raise HTTPException(status_code=400, detail="Order does not have a sample package")
-    if order.status not in ("awaiting_quote", "quoted", "paid", "processing"):
-        raise HTTPException(status_code=400, detail=f"Cannot generate package for order with status '{order.status}'")
-
     # 2. Read support files
     support_files = await db.execute(text("""
         SELECT sf.gcs_path, sf.filename, sf.file_role
@@ -386,10 +383,10 @@ async def generate_sample_package(
         try:
             raw_bytes, _ = storage.read_blob(sf.gcs_path)
             doc = convert_document(raw_bytes, sf.filename)
-            text = doc.text.strip()
-            all_text += f"\n\n--- {sf.filename} ({sf.file_role}) ---\n\n{text}"
+            doc_text = doc.text.strip()
+            all_text += f"\n\n--- {sf.filename} ({sf.file_role}) ---\n\n{doc_text}"
             if sf.file_role == "background":
-                background_text += f"\n\n{text}"
+                background_text += f"\n\n{doc_text}"
         except Exception as e:
             logger.warning(f"Failed to read support file {sf.gcs_path}: {e}")
 
