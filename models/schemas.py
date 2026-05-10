@@ -137,6 +137,7 @@ class OrderDetail(BaseModel):
     invoice_no:         Optional[str]
     gcs_output_path:    Optional[str]
     gcs_upload_path:    Optional[str] = None
+    proofreader_notes:  Optional[str] = None
 
 class AdminOrderDetail(OrderDetail):
     qa_result: Optional[dict] = None
