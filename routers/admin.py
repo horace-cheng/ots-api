@@ -603,6 +603,7 @@ async def admin_list_orders(
         SELECT
             o.id, o.track_type, o.status, o.source_lang, o.target_lang,
             o.word_count, o.price_ntd, o.title, o.notes,
+            o.has_sample_package,
             o.created_at, o.deadline_at, o.delivered_at,
             o.gcs_output_path, o.gcs_upload_path,
             p.payment_status, p.invoice_no,
