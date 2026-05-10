@@ -29,7 +29,7 @@ from models.schemas import (
     SamplePackageGenerateResponse,
 )
 from services.document_converter import convert_document
-from services.gemini import generate_synopsis
+from services.gemini import generate_synopsis, generate_book_fact_sheet, generate_market_analysis
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/editor", tags=["editor"])
@@ -949,19 +949,32 @@ async def lt_generate_sample_package(
 
     source_text = background_text or all_text
 
-    # Auto-fill book_fact_sheet from order metadata
-    book_fact_sheet = {
-        "title": order.title or "",
-        "word_count": str(order.word_count),
-    }
-
-    # Generate synopsis via Gemini
-    synopsis = await generate_synopsis(
+    # Generate all components via Gemini (parallel calls)
+    import asyncio
+    synopsis_task = generate_synopsis(
         source_text=source_text,
         source_lang=order.source_lang,
         target_lang=order.target_lang,
         api_key=settings.gemini_api_key,
     )
+    fact_sheet_task = generate_book_fact_sheet(
+        source_text=source_text,
+        source_lang=order.source_lang,
+        target_lang=order.target_lang,
+        title=order.title or "",
+        word_count=order.word_count,
+        api_key=settings.gemini_api_key,
+    )
+    market_task = generate_market_analysis(
+        source_text=source_text,
+        source_lang=order.source_lang,
+        target_lang=order.target_lang,
+        api_key=settings.gemini_api_key,
+    )
+    synopsis, book_fact_sheet, market_analysis = await asyncio.gather(
+        synopsis_task, fact_sheet_task, market_task,
+    )
+
     if not synopsis and source_text:
         synopsis = source_text[:800]
 
@@ -984,6 +997,7 @@ async def lt_generate_sample_package(
             translator_bio = :translator_bio,
             book_fact_sheet = CAST(:book_fact_sheet AS jsonb),
             synopsis = :synopsis,
+            market_analysis = :market_analysis,
             updated_at = NOW(),
             updated_by = :user_id
         WHERE order_id = :order_id
@@ -992,6 +1006,7 @@ async def lt_generate_sample_package(
         "translator_bio": translator_bio,
         "book_fact_sheet": json.dumps(book_fact_sheet),
         "synopsis": synopsis,
+        "market_analysis": market_analysis,
         "user_id": user["user_id"],
     })
     await db.commit()
@@ -1002,4 +1017,5 @@ async def lt_generate_sample_package(
         translator_bio=translator_bio,
         book_fact_sheet=book_fact_sheet,
         synopsis=synopsis,
+        market_analysis=market_analysis,
     )

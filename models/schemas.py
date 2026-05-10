@@ -352,10 +352,11 @@ class SamplePackageUpdate(BaseModel):
 
 
 class SamplePackageGenerateResponse(BaseModel):
-    message:       str
-    translator_bio: str = ""
+    message:         str
+    translator_bio:  str = ""
     book_fact_sheet: dict = {}
-    synopsis:      str = ""
+    synopsis:        str = ""
+    market_analysis: str = ""
 
 
 # ── Support Files ─────────────────────────────────────────────────────────────
