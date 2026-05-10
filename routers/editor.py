@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
+import json
 import logging
 
 from core.database import get_db
@@ -868,7 +869,7 @@ async def lt_update_sample_package(
         params["translator_bio"] = body.translator_bio
     if body.book_fact_sheet is not None:
         updates.append("book_fact_sheet = CAST(:book_fact_sheet AS jsonb)")
-        params["book_fact_sheet"] = str(body.book_fact_sheet)
+        params["book_fact_sheet"] = json.dumps(body.book_fact_sheet)
     if body.synopsis is not None:
         updates.append("synopsis = :synopsis")
         params["synopsis"] = body.synopsis
@@ -989,7 +990,7 @@ async def lt_generate_sample_package(
     """), {
         "order_id": order_id,
         "translator_bio": translator_bio,
-        "book_fact_sheet": str(book_fact_sheet),
+        "book_fact_sheet": json.dumps(book_fact_sheet),
         "synopsis": synopsis,
         "user_id": user["user_id"],
     })

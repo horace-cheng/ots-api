@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from datetime import datetime, timezone, timedelta
 import uuid
+import json
 import logging
 
 from core.database import get_db
@@ -432,7 +433,7 @@ async def generate_sample_package(
     """), {
         "order_id": order_id,
         "translator_bio": translator_bio,
-        "book_fact_sheet": str(book_fact_sheet),
+        "book_fact_sheet": json.dumps(book_fact_sheet),
         "synopsis": synopsis,
     })
     await db.commit()
