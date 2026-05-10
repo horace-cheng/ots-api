@@ -693,6 +693,12 @@ async def reject_lt_assignment(
         WHERE order_id = :id
     """), {"id": order_id, "notes": body.notes})
 
+    await db.execute(text("""
+        UPDATE orders
+        SET status = 'revision_needed'
+        WHERE id = :id
+    """), {"id": order_id})
+
     await db.commit()
     return MessageResponse(message="Assignment rejected, sent back for revision")
 
