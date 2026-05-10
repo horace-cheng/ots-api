@@ -901,7 +901,7 @@ async def get_order_segments(
     trans_raw    = storage.read_temp_json(order_id, "translations_raw.json")
 
     if not segments_raw or not translations:
-        raise HTTPException(status_code=404, detail="Segments or translations not found")
+        raise HTTPException(status_code=404, detail="翻譯段落尚未產生，請等待 pipeline 完成後再試")
 
     # 2. 從 DB 讀取 QA Flags
     result = await db.execute(text("""
