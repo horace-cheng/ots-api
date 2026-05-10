@@ -397,7 +397,8 @@ async def get_lt_order(
             o.title, o.notes, o.has_sample_package,
             o.created_at, o.deadline_at, o.delivered_at,
             o.gcs_output_path, o.gcs_upload_path,
-            p.payment_status, p.invoice_no
+            p.payment_status, p.invoice_no,
+            a.proofreader_notes
         FROM orders o
         LEFT JOIN payments p ON p.order_id = o.id
         JOIN assignments a ON a.order_id = o.id
