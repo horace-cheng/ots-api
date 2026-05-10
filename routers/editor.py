@@ -867,7 +867,7 @@ async def lt_update_sample_package(
         updates.append("translator_bio = :translator_bio")
         params["translator_bio"] = body.translator_bio
     if body.book_fact_sheet is not None:
-        updates.append("book_fact_sheet = :book_fact_sheet::jsonb")
+        updates.append("book_fact_sheet = CAST(:book_fact_sheet AS jsonb)")
         params["book_fact_sheet"] = str(body.book_fact_sheet)
     if body.synopsis is not None:
         updates.append("synopsis = :synopsis")
@@ -981,7 +981,7 @@ async def lt_generate_sample_package(
         UPDATE order_sample_packages
         SET status = 'generated',
             translator_bio = :translator_bio,
-            book_fact_sheet = :book_fact_sheet::jsonb,
+            book_fact_sheet = CAST(:book_fact_sheet AS jsonb),
             synopsis = :synopsis,
             updated_at = NOW(),
             updated_by = :user_id

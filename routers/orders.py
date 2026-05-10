@@ -425,7 +425,7 @@ async def generate_sample_package(
         UPDATE order_sample_packages
         SET status = 'generated',
             translator_bio = :translator_bio,
-            book_fact_sheet = :book_fact_sheet::jsonb,
+            book_fact_sheet = CAST(:book_fact_sheet AS jsonb),
             synopsis = :synopsis,
             updated_at = NOW()
         WHERE order_id = :order_id
