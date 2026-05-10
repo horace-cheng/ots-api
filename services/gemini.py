@@ -99,15 +99,26 @@ async def generate_book_fact_sheet(
     }
     src_name = lang_names.get(source_lang, source_lang)
 
-    prompt = f"""You are a literary metadata specialist. Based on the following reference material from a book originally in {src_name}, extract as much of the following information as possible. Return ONLY a JSON object (no preamble, no markdown) with these keys — use empty string for anything you cannot determine:
+    tgt_name = lang_names.get(target_lang, target_lang)
+
+    prompt = f"""You are a literary metadata specialist. Based on the following reference material from a book originally in {src_name}, extract as much of the following information as possible. For each field, provide the value both in the original language ({src_name}) and translated into {tgt_name}. Return ONLY a JSON object (no preamble, no markdown) with these keys — use empty string for anything you cannot determine:
 
 {{
-  "author": "",
-  "publisher": "",
-  "pub_date": "",
-  "category": "",
-  "sales": ""
+  "title_original": "",
+  "title_target": "",
+  "author_original": "",
+  "author_target": "",
+  "publisher_original": "",
+  "publisher_target": "",
+  "pub_date_original": "",
+  "pub_date_target": "",
+  "category_original": "",
+  "category_target": "",
+  "sales_original": "",
+  "sales_target": ""
 }}
+
+For author and publisher names, the "original" and "target" values will often be the same (proper names). For title, category, and sales, they may differ between the two languages.
 
 Reference material:
 ---
@@ -121,14 +132,16 @@ Reference material:
         raw = response.text.strip() if response.text else ""
         raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         data = json.loads(raw) if raw else {}
-        result = {"title": title or "", "word_count": str(word_count)}
-        for k in ("author", "publisher", "pub_date", "category", "sales"):
+        result = {"word_count": str(word_count)}
+        for k in ("title_original", "title_target", "author_original", "author_target",
+                   "publisher_original", "publisher_target", "pub_date_original", "pub_date_target",
+                   "category_original", "category_target", "sales_original", "sales_target"):
             result[k] = data.get(k, "")
         logger.info(f"Book fact sheet generated: {len(result)} fields")
         return result
     except Exception as e:
         logger.error(f"Gemini book fact sheet generation failed: {e}")
-        return {"title": title or "", "word_count": str(word_count)}
+        return {"word_count": str(word_count)}
 
 
 async def generate_market_analysis(
