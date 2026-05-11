@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">Dear Customer,</p>
+<p>Your translation order has been completed! Click the button below to view the translated content.</p>
+
+<table class="details">
+  <tr><td>Order</td><td>{{ order_id }}</td></tr>
+  <tr><td>Language Pair</td><td>{{ source_lang }} → {{ target_lang }}</td></tr>
+  {% if qa_score %}<tr><td>QA Score</td><td>{{ qa_score }}/100</td></tr>{% endif %}
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ output_url }}">View Translation</a>
+</p>
+{% endblock %}
+{% set header_title = "Translation Complete" %}
+{% block content_text %}Dear Customer,
+Your translation order has been completed!
+Order: {{ order_id }}
+Language Pair: {{ source_lang }} → {{ target_lang }}
+{% if qa_score %}QA Score: {{ qa_score }}/100{% endif %}
+View your translation: {{ output_url }}
+{% endblock %}

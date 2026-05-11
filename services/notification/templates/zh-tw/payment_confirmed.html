@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">您好，</p>
+<p>您的付款已確認成功！訂單正在處理中。</p>
+
+<table class="details">
+  <tr><td>訂單編號</td><td>{{ order_id }}</td></tr>
+  <tr><td>付款金額</td><td>NT$ {{ amount }}</td></tr>
+  <tr><td>狀態</td><td>處理中</td></tr>
+</table>
+
+<p>翻譯完成後，我們會將譯文寄送到您的信箱，您也可以隨時登入查看進度。</p>
+{% endblock %}
+{% set header_title = "付款成功" %}
+{% block content_text %}您好，
+您的付款已確認成功！訂單正在處理中。
+訂單編號：{{ order_id }}
+付款金額：NT$ {{ amount }}
+{% endblock %}

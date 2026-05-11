@@ -6,15 +6,21 @@ routers/internal.py
 不對外公開（docs_url=None 時不顯示，但 URL 仍可存取）。
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+import base64
+import json
+import os
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import google.auth.transport.requests
 import google.oauth2.id_token
-import os
-import logging
 
 from core.database import get_db
+from core.config import settings
+from services.notification import publish_event_sync, EventType
+from services.notification.sender import handle_notify_event
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -93,15 +99,13 @@ async def notify_internal(
 ):
     """
     Workflow 發送通知（pipeline 狀態變更、人工 QA 需求等）。
-    目前記 log，之後串接 email / Slack。
+    將事件發布到 Pub/Sub notify topic，由 email sender 非同步處理。
     """
     notify_type = body.get("type", "unknown")
     order_id    = body.get("order_id", "")
 
     logger.info(f"Internal notify: type={notify_type}, order={order_id}, from={caller['email']}")
 
-    # TODO: 串接 email 通知服務
-    # 目前只更新 order status log
     if notify_type == "pipeline_error":
         await db.execute(text("""
             UPDATE orders SET status = 'qa_review'
@@ -109,7 +113,76 @@ async def notify_internal(
         """), {"order_id": order_id})
         await db.commit()
 
+    event_type = _map_notify_type(notify_type)
+    if event_type:
+        data = {}
+        if notify_type == "pipeline_error":
+            data["error_message"] = body.get("error", "")
+        elif notify_type == "human_qa_required":
+            data["flag_count"] = body.get("flag_count", 0)
+        elif notify_type in ("delivery_complete",):
+            data.update({
+                "qa_score": body.get("qa_score", ""),
+                "output_url": body.get("output_url", ""),
+            })
+
+        await publish_event_sync(
+            event_type=event_type,
+            order_id=order_id,
+            data=data,
+        )
+
     return {"message": "notification received", "type": notify_type}
+
+
+_NOTIFY_TYPE_MAP = {
+    "delivery_complete": EventType.DELIVERY_COMPLETE,
+    "human_qa_required": EventType.QA_REVIEW_REQUIRED,
+    "pipeline_error": EventType.PIPELINE_ERROR,
+    "literary_assign_editor": EventType.EDITOR_ASSIGNED,
+    "literary_assign_proofreader": EventType.PROOFREADER_ASSIGNED,
+    "literary_editor_timeout": EventType.EDITOR_ASSIGNED,
+    "literary_proofreader_timeout": EventType.PROOFREADER_ASSIGNED,
+}
+
+
+def _map_notify_type(notify_type: str) -> EventType | None:
+    return _NOTIFY_TYPE_MAP.get(notify_type)
+
+
+# ── POST /internal/pubsub-notify ───────────────────────────────────────────────
+@router.post("/pubsub-notify")
+async def pubsub_notify(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Pub/Sub push subscription 接收端點。
+    接收來自 ots-notify-{env} topic 的事件，處理 email 發送。
+    使用 Cloud IAM 驗證（Pub/Sub push 會自動附加 OIDC token）。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    envelope = body.get("message", {})
+    data_b64 = envelope.get("data", "")
+    if not data_b64:
+        return {"status": "ok", "detail": "no data"}
+
+    try:
+        decoded = base64.b64decode(data_b64).decode("utf-8")
+        event_data = json.loads(decoded)
+    except Exception as e:
+        logger.warning(f"Failed to decode Pub/Sub message: {e}")
+        return {"status": "ok", "detail": "decode failed"}
+
+    logger.info(f"Pub/Sub notify: type={event_data.get('event_type')}, order={event_data.get('order_id')}")
+
+    await handle_notify_event(db, event_data)
+
+    return {"status": "ok"}
 
 
 # ── GET /internal/qa-flags ────────────────────────────────────────────────────

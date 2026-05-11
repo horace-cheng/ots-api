@@ -13,6 +13,7 @@ from sqlalchemy import text
 from core.database import get_db
 from core.firebase import verify_firebase_token
 from core.config import settings
+from services.notification import publish_event_sync, EventType
 import logging
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,13 @@ async def get_current_user(
             GROUP BY u.id
         """), {"uid": uid})
         user_row = result.fetchone()
+
+        await publish_event_sync(
+            event_type=EventType.USER_REGISTERED,
+            user_id=str(user_row.id),
+            recipient_email=email,
+            data={"user_email": email, "user_id": str(user_row.id)},
+        )
     elif email and not user_row.disabled:
         # 同步 email（Firebase 為源頭，DB 為快取）
         await db.execute(

@@ -23,6 +23,7 @@ from services.payment import get_payment_gateway, PaymentRequest, PaymentMethod
 from core import storage
 from services.document_converter import convert_document
 from services.gemini import generate_synopsis, generate_book_fact_sheet, generate_market_analysis
+from services.notification import publish_event_sync, EventType
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -159,6 +160,16 @@ async def create_order(
         payment_url = payment_result.payment_url
 
     logger.info(f"Order created: {order_id} ({body.track_type}, {body.word_count}字, status={status})")
+
+    event_type = EventType.ORDER_CREATED_LT if is_lit else EventType.ORDER_CREATED_FT
+    await publish_event_sync(
+        event_type=event_type,
+        order_id=order_id,
+        data={
+            "deadline": deadline.isoformat(),
+            "word_count": body.word_count,
+        },
+    )
 
     return OrderResponse(
         order_id           = order_id,

@@ -21,6 +21,7 @@ from services.payment import (
     InvoiceError,
 )
 from services.pipeline import trigger_pipeline
+from services.notification import publish_event_sync, EventType
 import logging
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,12 @@ async def payment_webhook(
     """), {"order_id": payload.order_id})
 
     await db.commit()
+
+    await publish_event_sync(
+        event_type=EventType.PAYMENT_CONFIRMED,
+        order_id=payload.order_id,
+        data={"amount": payload.amount_ntd},
+    )
 
     # 觸發 Pipeline
     await trigger_pipeline(payload.order_id)

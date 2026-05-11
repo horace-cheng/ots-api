@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">您好，</p>
+<p>感謝您使用 OTS Literary Track（文學精譯）服務！您的訂單已成功建立。</p>
+<p>目前狀態為 <strong>待報價</strong>，我們將在確認稿件後提供報價，屆時會再以 email 通知您。</p>
+
+<table class="details">
+  <tr><td>訂單編號</td><td>{{ order_id }}</td></tr>
+  <tr><td>語言方向</td><td>{{ source_lang }} → {{ target_lang }}</td></tr>
+  <tr><td>字數</td><td>{{ word_count }} 字</td></tr>
+</table>
+{% endblock %}
+{% set header_title = "訂單已建立（待報價）" %}
+{% block content_text %}您好，
+感謝您使用 OTS Literary Track 服務！您的訂單已成功建立。
+訂單編號：{{ order_id }}
+語言方向：{{ source_lang }} → {{ target_lang }}
+字數：{{ word_count }} 字
+我們將在確認稿件後提供報價。
+{% endblock %}

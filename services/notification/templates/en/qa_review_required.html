@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">Dear Customer,</p>
+<p>Your order has been flagged for manual QA review. Our team is reviewing the translation and will deliver it as soon as possible.</p>
+
+<table class="details">
+  <tr><td>Order</td><td>{{ order_id }}</td></tr>
+  <tr><td>Flags</td><td>{{ flag_count }} issue(s)</td></tr>
+</table>
+
+<p>We will notify you once the review is complete.</p>
+{% endblock %}
+{% set header_title = "QA Review Required" %}
+{% block content_text %}Dear Customer,
+Your order has been flagged for manual QA review.
+Order: {{ order_id }}
+Flags: {{ flag_count }} issue(s)
+Our team is reviewing the translation and will deliver it as soon as possible.
+{% endblock %}

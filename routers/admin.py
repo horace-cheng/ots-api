@@ -33,6 +33,7 @@ from services.payment import (
     get_payment_gateway, InvoiceRequest, InvoiceType, InvoiceError
 )
 from services.pipeline import trigger_pipeline
+from services.notification import publish_event_sync, EventType
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -195,7 +196,11 @@ async def set_order_quote(
 
     await db.commit()
 
-    # TODO: send email notification to user
+    await publish_event_sync(
+        event_type=EventType.QUOTE_SET,
+        order_id=order_id,
+        data={"quoted_price": body.quoted_price},
+    )
     logger.info(f"Quote set: order={order_id}, price={body.quoted_price}")
     return MessageResponse(message=f"Quote set: NT${body.quoted_price}")
 
@@ -247,6 +252,12 @@ async def confirm_manual_payment(
     """), {"order_id": order_id})
 
     await db.commit()
+
+    await publish_event_sync(
+        event_type=EventType.PAYMENT_CONFIRMED,
+        order_id=order_id,
+        data={"amount": body.confirmed_amount_ntd},
+    )
 
     # 觸發 Pipeline
     await trigger_pipeline(order_id)
@@ -501,6 +512,14 @@ async def assign_literary_role(
          """), {"user_id": str(user_row.id), "now": now, "order_id": order_id})
 
     await db.commit()
+
+    event_type = EventType.EDITOR_ASSIGNED if body.role == "editor" else EventType.PROOFREADER_ASSIGNED
+    await publish_event_sync(
+        event_type=event_type,
+        order_id=order_id,
+        recipient_email=getattr(user_row, "email", None),
+        data={"role": body.role},
+    )
 
     result = await db.execute(text("""
         SELECT id, order_id, editor_id, qa_id, proofreader_id,
@@ -847,6 +866,12 @@ async def update_user(
         await db.execute(
             text("UPDATE users SET disabled = :disabled WHERE id = :id"),
             {"disabled": body.disabled, "id": user_id}
+        )
+        event_type = EventType.USER_DISABLED if body.disabled else EventType.USER_ENABLED
+        await publish_event_sync(
+            event_type=event_type,
+            user_id=user_id,
+            recipient_email=user_row.email,
         )
 
     if body.is_editor is not None:

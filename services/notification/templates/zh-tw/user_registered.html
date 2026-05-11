@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">OTS 管理員您好，</p>
+<p>有新用戶在 <strong>{{ env }}</strong> 環境註冊，需要您手動啟用帳號。</p>
+
+<table class="details">
+  <tr><td>用戶 Email</td><td>{{ user_email }}</td></tr>
+  <tr><td>用戶 ID</td><td>{{ user_id }}</td></tr>
+  <tr><td>註冊環境</td><td>{{ env }}</td></tr>
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ admin_dashboard_url }}">前往管理後台</a>
+</p>
+{% endblock %}
+{% set header_title = "新用戶註冊通知" %}
+{% block content_text %}OTS 管理員您好，
+有新用戶在 {{ env }} 環境註冊，需要您手動啟用帳號。
+用戶 Email：{{ user_email }}
+用戶 ID：{{ user_id }}
+註冊環境：{{ env }}
+請前往管理後台啟用：{{ admin_dashboard_url }}
+{% endblock %}

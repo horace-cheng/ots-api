@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">Dear Customer,</p>
+<p>Your Literary Track order quote is ready. Please review the details below and proceed with payment.</p>
+
+<table class="details">
+  <tr><td>Order</td><td>{{ order_id }}</td></tr>
+  <tr><td>Quoted Price</td><td>NT$ {{ quoted_price }}</td></tr>
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ payment_url }}">Proceed to Payment</a>
+</p>
+{% endblock %}
+{% set header_title = "Quote Ready" %}
+{% block content_text %}Dear Customer,
+Your Literary Track order quote is ready.
+Order: {{ order_id }}
+Quoted Price: NT$ {{ quoted_price }}
+Proceed to payment: {{ payment_url }}
+{% endblock %}

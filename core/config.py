@@ -41,6 +41,20 @@ class Settings(BaseSettings):
     # ── Gemini (試譯包 synopsis 生成) ──────────────────────────────────────
     gemini_api_key: str = os.environ.get("GEMINI_API_KEY", "")
 
+    # ── Email 通知 ─────────────────────────────────────────────────────────
+    email_provider: str       = os.environ.get("EMAIL_PROVIDER", "smtp")
+    brevo_api_key: str        = os.environ.get("BREVO_API_KEY", "")
+    email_from_address: str   = os.environ.get("EMAIL_FROM_ADDRESS", "noreply@ots.tw")
+    email_from_name: str      = os.environ.get("EMAIL_FROM_NAME", "OTS 翻譯服務")
+    smtp_host: str            = os.environ.get("SMTP_HOST", "localhost")
+    smtp_port: int            = int(os.environ.get("SMTP_PORT", "1025"))
+    smtp_username: str        = os.environ.get("SMTP_USERNAME", "")
+    smtp_password: str        = os.environ.get("SMTP_PASSWORD", "")
+    smtp_use_tls: bool        = os.environ.get("SMTP_USE_TLS", "false").lower() == "true"
+
+    # ── Notification Pub/Sub ───────────────────────────────────────────────
+    notify_topic: str = os.environ.get("NOTIFY_TOPIC", f"ots-notify-dev")
+
     class Config:
         # 允許從 .env 檔載入（本機開發用）
         env_file = ".env"

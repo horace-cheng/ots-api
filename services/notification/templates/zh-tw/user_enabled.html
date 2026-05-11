@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">您好，</p>
+<p>您的 OTS 帳號已由管理員重新<strong>啟用</strong>。您現在可以正常登入使用各項服務。</p>
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ portal_url }}">前往 OTS</a>
+</p>
+{% endblock %}
+{% set header_title = "帳號已啟用" %}
+{% block content_text %}您好，
+您的 OTS 帳號已由管理員重新啟用。您現在可以正常登入使用各項服務。
+前往 OTS：{{ portal_url }}
+{% endblock %}

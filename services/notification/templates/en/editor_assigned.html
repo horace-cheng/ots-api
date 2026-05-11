@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">Dear Editor,</p>
+<p>You have been assigned as the <strong>editor</strong> for a Literary Track order. Please log in to view details.</p>
+
+<table class="details">
+  <tr><td>Order</td><td>{{ order_id }}</td></tr>
+  <tr><td>Language Pair</td><td>{{ source_lang }} → {{ target_lang }}</td></tr>
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ portal_url }}">Go to Editor Portal</a>
+</p>
+{% endblock %}
+{% set header_title = "Editor Assignment" %}
+{% block content_text %}Dear Editor,
+You have been assigned as the editor for a Literary Track order.
+Order: {{ order_id }}
+Language Pair: {{ source_lang }} → {{ target_lang }}
+Go to editor portal: {{ portal_url }}
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">고객님,</p>
+<p>관리자가 귀하의 OTS 계정을 <strong>재활성화</strong>했습니다. 이제 정상적으로 로그인하여 서비스를 이용하실 수 있습니다.</p>
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ portal_url }}">OTS 바로가기</a>
+</p>
+{% endblock %}
+{% set header_title = "계정 재활성화" %}
+{% block content_text %}고객님,
+관리자가 귀하의 OTS 계정을 재활성화했습니다. 이제 정상적으로 로그인하여 서비스를 이용하실 수 있습니다.
+OTS 바로가기：{{ portal_url }}
+{% endblock %}

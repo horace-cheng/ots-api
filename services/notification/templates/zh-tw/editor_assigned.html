@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">您好，</p>
+<p>您已被指派為以下 Literary Track 訂單的 <strong>編輯</strong>，請登入系統查看詳情。</p>
+
+<table class="details">
+  <tr><td>訂單編號</td><td>{{ order_id }}</td></tr>
+  <tr><td>語言方向</td><td>{{ source_lang }} → {{ target_lang }}</td></tr>
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ portal_url }}">前往編輯</a>
+</p>
+{% endblock %}
+{% set header_title = "編輯指派通知" %}
+{% block content_text %}您好，
+您已被指派為以下 Literary Track 訂單的編輯：
+訂單編號：{{ order_id }}
+語言方向：{{ source_lang }} → {{ target_lang }}
+請登入系統查看詳情：{{ portal_url }}
+{% endblock %}

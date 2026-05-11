@@ -1,0 +1,8 @@
+{{ header_title }}
+{{ "=" * header_title|length }}
+
+{% block content_text %}{% endblock %}
+
+---
+{{ footer_text }}
+{{ footer_contact }}

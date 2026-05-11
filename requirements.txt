@@ -17,6 +17,10 @@ stripe==11.4.1
 
 google-genai>=1.0.0
 
+# Email / Notification
+sib-api-v3-sdk>=7.6.0
+jinja2==3.1.4
+
 # Document conversion
 pdfminer.six>=20221105
 mammoth>=1.9.0

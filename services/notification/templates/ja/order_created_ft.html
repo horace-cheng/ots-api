@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">お客様</p>
+<p>OTS翻訳サービスをご利用いただきありがとうございます。ご注文が作成されました。現在 <strong>お支払い待ち</strong> です。</p>
+
+<table class="details">
+  <tr><td>注文番号</td><td>{{ order_id }}</td></tr>
+  <tr><td>言語方向</td><td>{{ source_lang }} → {{ target_lang }}</td></tr>
+  <tr><td>文字数</td><td>{{ word_count }} 字</td></tr>
+  <tr><td>金額</td><td>NT$ {{ price_ntd }}</td></tr>
+  <tr><td>納品予定</td><td>{{ deadline }}</td></tr>
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ payment_url }}">お支払いへ</a>
+</p>
+{% endblock %}
+{% set header_title = "注文作成完了" %}
+{% block content_text %}お客様
+OTS翻訳サービスをご利用いただきありがとうございます。
+注文番号：{{ order_id }}
+言語方向：{{ source_lang }} → {{ target_lang }}
+文字数：{{ word_count }} 字
+金額：NT$ {{ price_ntd }}
+納品予定：{{ deadline }}
+お支払い：{{ payment_url }}
+{% endblock %}

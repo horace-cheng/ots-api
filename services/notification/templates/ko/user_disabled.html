@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">고객님,</p>
+<p>관리자가 귀하의 OTS 계정을 <strong>비활성화</strong>했습니다. 현재 로그인 및 서비스 이용이 불가능합니다.</p>
+<p>문의 사항이 있으시면 service@ots.tw로 연락해 주시기 바랍니다.</p>
+{% endblock %}
+{% set header_title = "계정 비활성화" %}
+{% block content_text %}고객님,
+관리자가 귀하의 OTS 계정을 비활성화했습니다. 현재 로그인 및 서비스 이용이 불가능합니다.
+문의 사항이 있으시면 service@ots.tw로 연락해 주시기 바랍니다.
+{% endblock %}

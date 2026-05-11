@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">您好，</p>
+<p>您的翻譯訂單已完成！請點擊下方按鈕查看譯文。</p>
+
+<table class="details">
+  <tr><td>訂單編號</td><td>{{ order_id }}</td></tr>
+  <tr><td>語言方向</td><td>{{ source_lang }} → {{ target_lang }}</td></tr>
+  {% if qa_score %}<tr><td>QA 評分</td><td>{{ qa_score }}/100</td></tr>{% endif %}
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ output_url }}">查看譯文</a>
+</p>
+{% endblock %}
+{% set header_title = "翻譯完成" %}
+{% block content_text %}您好，
+您的翻譯訂單已完成！
+訂單編號：{{ order_id }}
+語言方向：{{ source_lang }} → {{ target_lang }}
+{% if qa_score %}QA 評分：{{ qa_score }}/100{% endif %}
+請前往以下連結查看譯文：{{ output_url }}
+{% endblock %}

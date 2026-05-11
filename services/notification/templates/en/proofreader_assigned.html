@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">Dear Proofreader,</p>
+<p>You have been assigned as the <strong>proofreader</strong> for a Literary Track order. Please log in to view details and begin your review.</p>
+
+<table class="details">
+  <tr><td>Order</td><td>{{ order_id }}</td></tr>
+  <tr><td>Language Pair</td><td>{{ source_lang }} → {{ target_lang }}</td></tr>
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ portal_url }}">Go to Proofreader Portal</a>
+</p>
+{% endblock %}
+{% set header_title = "Proofreader Assignment" %}
+{% block content_text %}Dear Proofreader,
+You have been assigned as the proofreader for a Literary Track order.
+Order: {{ order_id }}
+Language Pair: {{ source_lang }} → {{ target_lang }}
+Go to proofreader portal: {{ portal_url }}
+{% endblock %}

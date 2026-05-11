@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">お客様，</p>
+<p>管理者によりお客様の OTS アカウントが<strong>再有効化</strong>されました。通常通りログインしてサービスをご利用いただけます。</p>
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ portal_url }}">OTS へ</a>
+</p>
+{% endblock %}
+{% set header_title = "アカウント再有効化" %}
+{% block content_text %}お客様，
+管理者によりお客様の OTS アカウントが再有効化されました。通常通りログインしてサービスをご利用いただけます。
+OTS へ：{{ portal_url }}
+{% endblock %}

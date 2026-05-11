@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">고객님,</p>
+<p>번역 주문이 완료되었습니다! 아래 버튼을 클릭하여 번역문을 확인하세요.</p>
+
+<table class="details">
+  <tr><td>주문 번호</td><td>{{ order_id }}</td></tr>
+  <tr><td>언어 방향</td><td>{{ source_lang }} → {{ target_lang }}</td></tr>
+  {% if qa_score %}<tr><td>QA 점수</td><td>{{ qa_score }}/100</td></tr>{% endif %}
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ output_url }}">번역문 보기</a>
+</p>
+{% endblock %}
+{% set header_title = "번역 완료" %}
+{% block content_text %}고객님,
+번역 주문이 완료되었습니다.
+주문 번호：{{ order_id }}
+언어 방향：{{ source_lang }} → {{ target_lang }}
+{% if qa_score %}QA 점수：{{ qa_score }}/100{% endif %}
+번역문 보기：{{ output_url }}
+{% endblock %}

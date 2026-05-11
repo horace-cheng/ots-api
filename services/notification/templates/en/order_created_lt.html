@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">Dear Customer,</p>
+<p>Thank you for using OTS Literary Track service! Your order has been created successfully.</p>
+<p>The current status is <strong>awaiting quote</strong>. We will review your document and provide a quotation shortly.</p>
+
+<table class="details">
+  <tr><td>Order</td><td>{{ order_id }}</td></tr>
+  <tr><td>Language Pair</td><td>{{ source_lang }} → {{ target_lang }}</td></tr>
+  <tr><td>Word Count</td><td>{{ word_count }} words</td></tr>
+</table>
+{% endblock %}
+{% set header_title = "Order Created (Awaiting Quote)" %}
+{% block content_text %}Dear Customer,
+Thank you for using OTS Literary Track service! Your order has been created successfully.
+Order: {{ order_id }}
+Language Pair: {{ source_lang }} → {{ target_lang }}
+Word Count: {{ word_count }} words
+We will review your document and provide a quotation shortly.
+{% endblock %}

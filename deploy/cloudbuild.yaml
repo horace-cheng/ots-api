@@ -44,6 +44,7 @@ steps:
       - --set-secrets=ECPAY_HASH_KEY=ots-ecpay-hash-key-$_ENV:latest
       - --set-secrets=ECPAY_HASH_IV=ots-ecpay-hash-iv-$_ENV:latest
       - --set-secrets=GEMINI_API_KEY=ots-google-ai-key-$_ENV:latest
+      - --set-secrets=BREVO_API_KEY=ots-brevo-apikey-$_ENV:latest
       - --set-env-vars=PROJECT_ID=$PROJECT_ID
       - --set-env-vars=SERVICE_ACCOUNT_EMAIL=ots-api-backend-$_ENV@$PROJECT_ID.iam.gserviceaccount.com      
       - --set-env-vars=INTERNAL_ALLOWED_SA=ots-workflow-$_ENV@$PROJECT_ID.iam.gserviceaccount.com
@@ -52,6 +53,11 @@ steps:
       - --set-env-vars=GCS_OUTPUTS_BUCKET=$PROJECT_ID-outputs-$_ENV
       - --set-env-vars=GCS_TEMP_BUCKET=$PROJECT_ID-pipeline-temp-$_ENV
       - --set-env-vars=PUBSUB_TOPIC=ots-pipeline-trigger-$_ENV
+      - --set-env-vars=NOTIFY_TOPIC=ots-notify-$_ENV
+      - --set-env-vars=EMAIL_PROVIDER=brevo
+      - --set-env-vars=EMAIL_FROM_ADDRESS=noreply@ots.tw
+      - --set-env-vars=EMAIL_FROM_NAME=OTS 翻譯服務
+      - --set-env-vars=WEB_PORTAL_URL=$_WEB_PORTAL_URL
       - --no-allow-unauthenticated
       - --min-instances=0
       - --max-instances=5
@@ -59,6 +65,7 @@ steps:
 
 substitutions:
   _ENV: dev
+  _WEB_PORTAL_URL: https://ots-frontend-dev-miptn5nxpa-de.a.run.app
 
 images:
   - asia-east1-docker.pkg.dev/$PROJECT_ID/ots/api-backend

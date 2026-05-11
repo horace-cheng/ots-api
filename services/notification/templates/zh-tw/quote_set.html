@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">您好，</p>
+<p>您的 Literary Track 訂單報價已出爐，請查看以下詳情並前往付款。</p>
+
+<table class="details">
+  <tr><td>訂單編號</td><td>{{ order_id }}</td></tr>
+  <tr><td>報價金額</td><td>NT$ {{ quoted_price }}</td></tr>
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ payment_url }}">前往付款</a>
+</p>
+{% endblock %}
+{% set header_title = "報價已出爐" %}
+{% block content_text %}您好，
+您的 Literary Track 訂單報價已出爐。
+訂單編號：{{ order_id }}
+報價金額：NT$ {{ quoted_price }}
+請前往以下連結付款：{{ payment_url }}
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">Dear Customer,</p>
+<p>Your OTS account has been <strong>re-enabled</strong> by an administrator. You can now log in and use our services as usual.</p>
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ portal_url }}">Go to OTS</a>
+</p>
+{% endblock %}
+{% set header_title = "Account Re-enabled" %}
+{% block content_text %}Dear Customer,
+Your OTS account has been re-enabled by an administrator. You can now log in and use our services as usual.
+Go to OTS: {{ portal_url }}
+{% endblock %}

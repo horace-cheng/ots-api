@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">Dear Customer,</p>
+<p>Your payment has been confirmed! Your order is now being processed.</p>
+
+<table class="details">
+  <tr><td>Order</td><td>{{ order_id }}</td></tr>
+  <tr><td>Amount Paid</td><td>NT$ {{ amount }}</td></tr>
+  <tr><td>Status</td><td>Processing</td></tr>
+</table>
+
+<p>We will notify you once the translation is complete.</p>
+{% endblock %}
+{% set header_title = "Payment Confirmed" %}
+{% block content_text %}Dear Customer,
+Your payment has been confirmed! Your order is now being processed.
+Order: {{ order_id }}
+Amount Paid: NT$ {{ amount }}
+{% endblock %}

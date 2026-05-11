@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">您好，</p>
+<p>您的訂單在自動 QA 檢查中發現部分問題，需要人工審閱。</p>
+
+<table class="details">
+  <tr><td>訂單編號</td><td>{{ order_id }}</td></tr>
+  <tr><td>問題數量</td><td>{{ flag_count }} 個</td></tr>
+</table>
+
+<p>我們的團隊正在處理中，完成後會盡快交付。</p>
+{% endblock %}
+{% set header_title = "QA 審閱中" %}
+{% block content_text %}您好，
+您的訂單在自動 QA 檢查中發現部分問題，需要人工審閱。
+訂單編號：{{ order_id }}
+問題數量：{{ flag_count }} 個
+{% endblock %}

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">OTS Admin,</p>
+<p>A new user has registered in the <strong>{{ env }}</strong> environment and requires manual account activation.</p>
+
+<table class="details">
+  <tr><td>User Email</td><td>{{ user_email }}</td></tr>
+  <tr><td>User ID</td><td>{{ user_id }}</td></tr>
+  <tr><td>Environment</td><td>{{ env }}</td></tr>
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ admin_dashboard_url }}">Go to Admin Dashboard</a>
+</p>
+{% endblock %}
+{% set header_title = "New User Registration" %}
+{% block content_text %}OTS Admin,
+A new user has registered in the {{ env }} environment and requires manual account activation.
+User Email: {{ user_email }}
+User ID: {{ user_id }}
+Environment: {{ env }}
+Go to admin dashboard: {{ admin_dashboard_url }}
+{% endblock %}

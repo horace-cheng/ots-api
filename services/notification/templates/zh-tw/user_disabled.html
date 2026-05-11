@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">您好，</p>
+<p>您的 OTS 帳號已由管理員<strong>停用</strong>，暫時無法登入使用服務。</p>
+<p>如有任何疑問，請聯繫客服：service@ots.tw</p>
+{% endblock %}
+{% set header_title = "帳號已停用" %}
+{% block content_text %}您好，
+您的 OTS 帳號已由管理員停用，暫時無法登入使用服務。
+如有任何疑問，請聯繫客服：service@ots.tw
+{% endblock %}

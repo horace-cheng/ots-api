@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">Dear Customer,</p>
+<p>Thank you for using OTS Translation Service! Your order has been created and is currently <strong>awaiting payment</strong>.</p>
+
+<table class="details">
+  <tr><td>Order</td><td>{{ order_id }}</td></tr>
+  <tr><td>Language Pair</td><td>{{ source_lang }} → {{ target_lang }}</td></tr>
+  <tr><td>Word Count</td><td>{{ word_count }}</td></tr>
+  <tr><td>Amount</td><td>NT$ {{ price_ntd }}</td></tr>
+  <tr><td>Expected Delivery</td><td>{{ deadline }}</td></tr>
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ payment_url }}">Proceed to Payment</a>
+</p>
+{% endblock %}
+{% set header_title = "Order Created" %}
+{% block content_text %}Dear Customer,
+Thank you for using OTS Translation Service!
+Order: {{ order_id }}
+Language Pair: {{ source_lang }} → {{ target_lang }}
+Word Count: {{ word_count }}
+Amount: NT$ {{ price_ntd }}
+Expected Delivery: {{ deadline }}
+Proceed to payment: {{ payment_url }}
+{% endblock %}

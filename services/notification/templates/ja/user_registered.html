@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">OTS 管理者様</p>
+<p><strong>{{ env }}</strong> 環境に新規ユーザーが登録されました。手動でアカウントを有効化する必要があります。</p>
+
+<table class="details">
+  <tr><td>ユーザー Email</td><td>{{ user_email }}</td></tr>
+  <tr><td>ユーザー ID</td><td>{{ user_id }}</td></tr>
+  <tr><td>環境</td><td>{{ env }}</td></tr>
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ admin_dashboard_url }}">管理画面へ</a>
+</p>
+{% endblock %}
+{% set header_title = "新規ユーザー登録通知" %}
+{% block content_text %}OTS 管理者様
+{{ env }} 環境に新規ユーザーが登録されました。
+ユーザー Email：{{ user_email }}
+ユーザー ID：{{ user_id }}
+環境：{{ env }}
+管理画面で有効化してください：{{ admin_dashboard_url }}
+{% endblock %}

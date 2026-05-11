@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">OTS 管理員您好，</p>
+<p>以下訂單在 Pipeline 處理過程中發生錯誤，需要人工介入。</p>
+
+<table class="details">
+  <tr><td>訂單編號</td><td>{{ order_id }}</td></tr>
+  <tr><td>錯誤訊息</td><td>{{ error_message }}</td></tr>
+</table>
+{% endblock %}
+{% set header_title = "Pipeline 錯誤通知" %}
+{% block content_text %}OTS 管理員您好，
+以下訂單在 Pipeline 處理過程中發生錯誤：
+訂單編號：{{ order_id }}
+錯誤訊息：{{ error_message }}
+{% endblock %}

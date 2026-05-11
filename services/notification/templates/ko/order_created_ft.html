@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">고객님,</p>
+<p>OTS 번역 서비스를 이용해 주셔서 감사합니다! 주문이 생성되었으며 현재 <strong>결제 대기</strong> 상태입니다.</p>
+
+<table class="details">
+  <tr><td>주문 번호</td><td>{{ order_id }}</td></tr>
+  <tr><td>언어 방향</td><td>{{ source_lang }} → {{ target_lang }}</td></tr>
+  <tr><td>단어 수</td><td>{{ word_count }} 자</td></tr>
+  <tr><td>금액</td><td>NT$ {{ price_ntd }}</td></tr>
+  <tr><td>예상 완료일</td><td>{{ deadline }}</td></tr>
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ payment_url }}">결제하기</a>
+</p>
+{% endblock %}
+{% set header_title = "주문 생성 완료" %}
+{% block content_text %}고객님,
+OTS 번역 서비스를 이용해 주셔서 감사합니다!
+주문 번호：{{ order_id }}
+언어 방향：{{ source_lang }} → {{ target_lang }}
+단어 수：{{ word_count }} 자
+금액：NT$ {{ price_ntd }}
+예상 완료일：{{ deadline }}
+결제하기：{{ payment_url }}
+{% endblock %}

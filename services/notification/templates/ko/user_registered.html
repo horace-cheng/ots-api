@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">OTS 관리자님,</p>
+<p><strong>{{ env }}</strong> 환경에 새 사용자가 등록되었습니다. 수동으로 계정을 활성화해야 합니다.</p>
+
+<table class="details">
+  <tr><td>사용자 Email</td><td>{{ user_email }}</td></tr>
+  <tr><td>사용자 ID</td><td>{{ user_id }}</td></tr>
+  <tr><td>환경</td><td>{{ env }}</td></tr>
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ admin_dashboard_url }}">관리 페이지로 이동</a>
+</p>
+{% endblock %}
+{% set header_title = "신규 사용자 등록 알림" %}
+{% block content_text %}OTS 관리자님,
+{{ env }} 환경에 새 사용자가 등록되었습니다.
+사용자 Email：{{ user_email }}
+사용자 ID：{{ user_id }}
+환경：{{ env }}
+관리 페이지에서 활성화해 주세요：{{ admin_dashboard_url }}
+{% endblock %}
