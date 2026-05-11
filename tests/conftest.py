@@ -43,6 +43,15 @@ def mock_db():
 
 
 @pytest.fixture
+def mock_notification_publisher(monkeypatch):
+    """Prevent real Pub/Sub publishing during tests — saves Brevo daily quota.
+    Apply this fixture to test classes that exercise endpoints calling publish_event_sync.
+    """
+    import services.notification.publisher as publisher_mod
+    monkeypatch.setattr(publisher_mod, "publish_event", AsyncMock(return_value=""))
+
+
+@pytest.fixture
 def ecpay_settings(monkeypatch):
     """Inject ECPay sandbox credentials into the settings singleton."""
     from core.config import settings

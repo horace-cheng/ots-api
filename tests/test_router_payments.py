@@ -7,6 +7,8 @@ from core.database import get_db
 from routers.payments import router
 from services.payment.base import PaymentStatus, WebhookPayload
 
+pytestmark = pytest.mark.usefixtures("mock_notification_publisher")
+
 
 def _webhook_payload(
     status: PaymentStatus = PaymentStatus.PAID,

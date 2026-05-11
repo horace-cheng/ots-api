@@ -9,6 +9,8 @@ from routers.auth import get_admin_user
 from routers.admin import router
 from tests.factories import MOCK_ADMIN_USER
 
+pytestmark = pytest.mark.usefixtures("mock_notification_publisher")
+
 
 @pytest.fixture
 def admin_client(mock_db):

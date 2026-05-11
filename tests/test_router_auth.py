@@ -8,6 +8,8 @@ from routers.auth import (
     get_current_user, get_admin_user, get_editor_user, get_qa_user, get_reviewer_user
 )
 
+pytestmark = pytest.mark.usefixtures("mock_notification_publisher")
+
 DECODED_TOKEN = {
     "uid": "firebase-uid-001",
     "email": "user@ots.tw",

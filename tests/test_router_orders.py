@@ -8,6 +8,8 @@ from routers.auth import get_current_user
 from routers.orders import router
 from tests.factories import MOCK_USER
 
+pytestmark = pytest.mark.usefixtures("mock_notification_publisher")
+
 
 @pytest.fixture
 def mock_gateway():
