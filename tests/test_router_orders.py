@@ -37,6 +37,21 @@ def orders_client(mock_db, mock_gateway):
 
 
 class TestCreateOrder:
+    @pytest.fixture(autouse=True)
+    def setup_mock_db(self, mock_db):
+        def _execute_handler(sql, params=None):
+            sql_str = str(sql).lower()
+            if "language_configs" in sql_str:
+                l1 = MagicMock(code="zh-tw", direction="both", price_multiplier=1.0)
+                l2 = MagicMock(code="en", direction="target", price_multiplier=1.0)
+                l3 = MagicMock(code="tai-lo", direction="source", price_multiplier=1.0)
+                l4 = MagicMock(code="ja", direction="target", price_multiplier=1.2)
+                res = MagicMock()
+                res.fetchall.return_value = [l1, l2, l3, l4]
+                return res
+            return MagicMock()
+        mock_db.execute.side_effect = _execute_handler
+
     def test_returns_201_with_payment_url(self, orders_client):
         resp = orders_client.post("/orders", json={
             "track_type": "fast",
@@ -102,6 +117,11 @@ class TestCreateOrder:
             "price_ntd": 2000,
         })
         assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        if isinstance(detail, list):
+            assert any("must be different" in d["msg"] for d in detail)
+        else:
+            assert "Invalid or inactive target language" in detail or "must be different" in detail
 
     def test_zero_word_count_returns_422(self, orders_client):
         resp = orders_client.post("/orders", json={

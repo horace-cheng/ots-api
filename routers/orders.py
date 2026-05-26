@@ -37,15 +37,13 @@ def _calc_deadline(track_type: str) -> datetime:
     return now + timedelta(days=30)
 
 
-def _calc_price(track_type: str, word_count: int, target_lang: str) -> int:
+def _calc_price(track_type: str, word_count: int, lang_multiplier: float = 1.0) -> int:
     """
     簡易報價計算（實際報價依業務規則調整）。
     Fast Track:    NT$2/字，最低 NT$2,000
     Literary Track: NT$6/字，最低 NT$20,000
-    日文加成 20%
     """
     base_rate = {"fast": 2, "literary": 6}.get(track_type, 2)
-    lang_multiplier = 1.2 if target_lang == "ja" else 1.0
     price = int(word_count * base_rate * lang_multiplier)
     minimum = {"fast": 2000, "literary": 20000}.get(track_type, 2000)
     return max(price, minimum)
@@ -67,9 +65,25 @@ async def create_order(
     title    = (body.title or "").strip() or None
     is_lit   = body.track_type == "literary"
 
+    # Validate languages against DB active configs
+    lang_res = await db.execute(text("""
+        SELECT code, direction, price_multiplier FROM language_configs WHERE is_active = true
+    """))
+    active_langs = lang_res.fetchall()
+
+    source_lang_ok = any(l.code == body.source_lang and l.direction in ('source', 'both') for l in active_langs)
+    if not source_lang_ok:
+        raise HTTPException(status_code=422, detail=f"Invalid or inactive source language: {body.source_lang}")
+
+    target_lang_entry = next((l for l in active_langs if l.code == body.target_lang and l.direction in ('target', 'both')), None)
+    if not target_lang_entry:
+        raise HTTPException(status_code=422, detail=f"Invalid or inactive target language: {body.target_lang}")
+
+    lang_multiplier = float(target_lang_entry.price_multiplier)
+
     # Fast Track: upfront pricing; Literary Track: awaiting quote
-    price    = 0 if is_lit else _calc_price(body.track_type, body.word_count, body.target_lang)
-    ref_price = None if not is_lit else _calc_price(body.track_type, body.word_count, body.target_lang)
+    price    = 0 if is_lit else _calc_price(body.track_type, body.word_count, lang_multiplier)
+    ref_price = None if not is_lit else _calc_price(body.track_type, body.word_count, lang_multiplier)
     deadline = _calc_deadline(body.track_type)
     status   = "awaiting_quote" if is_lit else "pending_payment"
 

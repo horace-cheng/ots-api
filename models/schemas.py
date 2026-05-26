@@ -19,15 +19,6 @@ class TrackType(str, Enum):
     FAST     = "fast"
     LITERARY = "literary"
 
-class LangCode(str, Enum):
-    TAI_LO     = "tai-lo"
-    HAKKA      = "hakka"
-    INDIGENOUS = "indigenous"
-    ZH_TW      = "zh-tw"
-    EN         = "en"
-    JA         = "ja"
-    KO         = "ko"
-
 class OrderStatus(str, Enum):
     PENDING_PAYMENT = "pending_payment"
     AWAITING_QUOTE  = "awaiting_quote"
@@ -89,8 +80,8 @@ class UserLanguageUpdate(BaseModel):
 # ── Order ─────────────────────────────────────────────────────────────────────
 class OrderCreate(BaseModel):
     track_type:      TrackType
-    source_lang:     LangCode
-    target_lang:     LangCode
+    source_lang:     str
+    target_lang:     str
     word_count:      int   = Field(..., gt=0, description="原文字數")
     title:           Optional[str] = Field(None, max_length=50, description="訂單標題（選填，不填則自動產生）")
     notes:           Optional[str] = Field(None, max_length=500)
@@ -400,3 +391,39 @@ class MessageResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+# ── Language Configs ────────────────────────────────────────────────────────
+class LanguageConfigResponse(BaseModel):
+    id:               int
+    code:             str
+    label_zh:         str
+    label_en:         str
+    direction:        str
+    is_active:        bool
+    sort_order:       int
+    price_multiplier: float
+    created_at:       datetime
+
+class LanguageConfigCreate(BaseModel):
+    code:             str
+    direction:        str
+    sort_order:       Optional[int] = 0
+    price_multiplier: Optional[float] = 1.0
+
+class LanguageConfigUpdate(BaseModel):
+    label_zh:         Optional[str] = None
+    label_en:         Optional[str] = None
+    direction:        Optional[str] = None
+    is_active:        Optional[bool] = None
+    sort_order:       Optional[int] = None
+    price_multiplier: Optional[float] = None
+
+class LanguageConfigListResponse(BaseModel):
+    languages: List[LanguageConfigResponse]
+
+class SupportedLanguageResponse(BaseModel):
+    code:             str
+    label_zh:         str
+    label_en:         str
+    default_direction: str

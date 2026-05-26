@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from pydantic import ValidationError
 from models.schemas import (
     UserProfileUpdate, ClientType,
-    OrderCreate, TrackType, LangCode,
+    OrderCreate, TrackType,
     QAFlagResolve,
     UserUpdateRequest, UserProfileResponse,
 )
@@ -31,8 +31,8 @@ class TestOrderCreate:
     def _valid(self, **overrides):
         defaults = dict(
             track_type=TrackType.FAST,
-            source_lang=LangCode.ZH_TW,
-            target_lang=LangCode.EN,
+            source_lang="zh-tw",
+            target_lang="en",
             word_count=1000,
         )
         return OrderCreate(**{**defaults, **overrides})
@@ -43,7 +43,7 @@ class TestOrderCreate:
 
     def test_same_source_target_lang_raises(self):
         with pytest.raises(ValidationError, match="must be different"):
-            self._valid(source_lang=LangCode.ZH_TW, target_lang=LangCode.ZH_TW)
+            self._valid(source_lang="zh-tw", target_lang="zh-tw")
 
     def test_word_count_zero_raises(self):
         with pytest.raises(ValidationError):
