@@ -468,14 +468,16 @@ async def assign_literary_role(
     now = datetime.now(timezone.utc)
 
     if body.role == "editor":
-        # Check assignment exists
         assign_result = await db.execute(text("""
             SELECT status FROM assignments WHERE order_id = :order_id
         """), {"order_id": order_id})
         assign_row = assign_result.fetchone()
         if not assign_row:
-            raise HTTPException(status_code=404, detail="Literary assignment not found")
-        if assign_row.status not in ("pending", "editing"):
+            await db.execute(text("""
+                INSERT INTO assignments (order_id, status)
+                VALUES (:order_id, 'pending')
+            """), {"order_id": order_id})
+        elif assign_row.status not in ("pending", "editing"):
             raise HTTPException(status_code=400, detail=f"Cannot assign editor when status is '{assign_row.status}'")
 
         await db.execute(text("""
@@ -499,8 +501,11 @@ async def assign_literary_role(
         """), {"order_id": order_id})
         assign_row = assign_result.fetchone()
         if not assign_row:
-            raise HTTPException(status_code=404, detail="Literary assignment not found")
-        if assign_row.status not in ("editor_done", "proofreading"):
+            await db.execute(text("""
+                INSERT INTO assignments (order_id, status)
+                VALUES (:order_id, 'pending')
+            """), {"order_id": order_id})
+        elif assign_row.status not in ("editor_done", "proofreading"):
             raise HTTPException(status_code=400, detail=f"Cannot assign proofreader when status is '{assign_row.status}'")
 
         await db.execute(text("""
