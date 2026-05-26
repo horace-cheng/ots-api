@@ -46,6 +46,8 @@ LANG_ZH = {
 
 ALLOWED_CONTENT_TYPES = {
     "text/plain",
+    "text/html",
+    "text/markdown",
     "application/pdf",
     "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -57,13 +59,18 @@ def _extract_title(gcs_path: str) -> str | None:
     try:
         filename = gcs_path.rsplit("/", 1)[-1].lower()
         ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
-        if ext != "txt":
+        if ext not in ("txt", "html", "htm", "md", "markdown"):
             return None
 
         client = get_storage_client()
         blob   = client.bucket(settings.gcs_uploads_bucket).blob(gcs_path)
         data   = blob.download_as_bytes(start=0, end=600)
         text_  = data.decode("utf-8", errors="ignore")
+
+        # Strip HTML tags for title extraction
+        if ext in ("html", "htm"):
+            import re as _re
+            text_ = _re.sub(r"<[^>]+>", " ", text_)
 
         words = text_.split()
         if not words:
@@ -204,10 +211,41 @@ async def get_download_url(
     return DownloadUrlResponse(signed_url=signed_url, expires_in=3600)
 
 
+# ── GET /files/{order_id}/bilingual-download-url ──────────────────────────────
+@router.get("/{order_id}/bilingual-download-url", response_model=DownloadUrlResponse)
+async def get_bilingual_download_url(
+    order_id: str,
+    user: dict         = Depends(get_current_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    result = await db.execute(text("""
+        SELECT o.status, o.gcs_bilingual_output_path FROM orders o
+        JOIN users u ON u.id = o.user_id
+        WHERE o.id = :order_id AND u.uid_firebase = :uid
+    """), {"order_id": order_id, "uid": user["uid"]})
+
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if row.status != "delivered":
+        raise HTTPException(
+            status_code=400,
+            detail="Translation not yet delivered"
+        )
+    if not row.gcs_bilingual_output_path:
+        raise HTTPException(status_code=404, detail="Bilingual output file not found")
+
+    signed_url = generate_download_signed_url(row.gcs_bilingual_output_path)
+
+    return DownloadUrlResponse(signed_url=signed_url, expires_in=3600)
+
+
 # ── Support Files (Literary Track) ───────────────────────────────────────────
 
 SUPPORT_CONTENT_TYPES = {
     "text/plain",
+    "text/html",
+    "text/markdown",
     "application/pdf",
     "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

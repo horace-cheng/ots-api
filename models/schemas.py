@@ -127,6 +127,7 @@ class OrderDetail(BaseModel):
     payment_status:     Optional[str]
     invoice_no:         Optional[str]
     gcs_output_path:    Optional[str]
+    gcs_bilingual_output_path: Optional[str] = None
     gcs_upload_path:    Optional[str] = None
     proofreader_notes:  Optional[str] = None
 
