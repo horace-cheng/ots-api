@@ -93,6 +93,10 @@ async def admin_add_language(
     master_lang = next((lang for lang in SUPPORTED_LANGUAGES if lang["code"] == body.code), None)
     if not master_lang:
         raise HTTPException(status_code=500, detail="Master list mismatch")
+    
+    # Validate direction is compatible with language's default_direction
+    if master_lang["default_direction"] != "both" and body.direction != master_lang["default_direction"]:
+        raise HTTPException(status_code=400, detail=f"Language '{body.code}' only supports direction '{master_lang['default_direction']}', got '{body.direction}'")
         
     # Check if already exists for this direction (or if there's a conflict with 'both')
     check = await db.execute(text("""
@@ -131,8 +135,9 @@ async def admin_update_language(
     """
     Admin: Update an existing language config (toggle active, change sort order, labels, multiplier).
     """
-    check = await db.execute(text("SELECT id FROM language_configs WHERE id = :id"), {"id": config_id})
-    if not check.fetchone():
+    check = await db.execute(text("SELECT id, code FROM language_configs WHERE id = :id"), {"id": config_id})
+    config_row = check.fetchone()
+    if not config_row:
         raise HTTPException(status_code=404, detail="Language config not found")
 
     updates = []
@@ -147,6 +152,9 @@ async def admin_update_language(
     if body.direction is not None:
         if body.direction not in ('source', 'target', 'both'):
             raise HTTPException(status_code=400, detail="Direction must be 'source', 'target', or 'both'")
+        master = next((lang for lang in SUPPORTED_LANGUAGES if lang["code"] == config_row.code), None)
+        if master and master["default_direction"] != "both" and body.direction != master["default_direction"]:
+            raise HTTPException(status_code=400, detail=f"Language '{config_row.code}' only supports direction '{master['default_direction']}', got '{body.direction}'")
         updates.append("direction = :direction")
         params["direction"] = body.direction
     if body.is_active is not None:
