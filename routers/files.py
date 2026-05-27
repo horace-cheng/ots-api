@@ -115,6 +115,12 @@ async def get_upload_url(
             detail="Can only upload files for pending_payment, awaiting_quote, or paid orders"
         )
 
+    if body.file_size > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File exceeds the {MAX_FILE_SIZE // (1024 * 1024)} MB size limit ({body.file_size} bytes)"
+        )
+
     signed_url, gcs_path = generate_upload_signed_url(
         order_id     = body.order_id,
         filename     = body.filename,
@@ -152,6 +158,9 @@ async def confirm_upload(
     row = result.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Order not found")
+
+    _check_file_size(settings.gcs_uploads_bucket, gcs_path)
+    _check_order_total_size(order_id, 0)
 
     await db.execute(text("""
         UPDATE orders SET gcs_upload_path = :gcs_path WHERE id = :order_id
@@ -271,6 +280,39 @@ async def get_plain_text_download_url(
 
 # ── Support Files (Literary Track) ───────────────────────────────────────────
 
+# 2 MB per file, 18 MB total across all files for one order
+MAX_FILE_SIZE  = 2 * 1024 * 1024
+MAX_ORDER_SIZE = 18 * 1024 * 1024
+
+
+def _check_file_size(bucket_name: str, gcs_path: str) -> int:
+    """Validate a single blob is within MAX_FILE_SIZE. Returns its size in bytes."""
+    client = get_storage_client()
+    blob   = client.bucket(bucket_name).get_blob(gcs_path)
+    if blob is None:
+        raise HTTPException(status_code=400, detail=f"File not found on GCS: {gcs_path}")
+    if blob.size > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File exceeds the {MAX_FILE_SIZE // (1024 * 1024)} MB size limit ({blob.size} bytes)"
+        )
+    return blob.size
+
+
+def _check_order_total_size(order_id: str, new_file_size: int) -> None:
+    """Check that adding new_file_size does not exceed MAX_ORDER_SIZE across all blobs."""
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_uploads_bucket)
+    total = new_file_size
+    for blob in bucket.list_blobs(prefix=f"orders/{order_id}/"):
+        total += blob.size
+    if total > MAX_ORDER_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Total uploaded files exceed the {MAX_ORDER_SIZE // (1024 * 1024)} MB limit ({total} bytes)"
+        )
+
+
 SUPPORT_CONTENT_TYPES = {
     "text/plain",
     "text/html",
@@ -360,6 +402,9 @@ async def confirm_support_upload(
     row = result.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Order not found")
+
+    _check_file_size(settings.gcs_uploads_bucket, gcs_path)
+    _check_order_total_size(order_id, 0)
 
     result = await db.execute(text("""
         INSERT INTO order_support_files

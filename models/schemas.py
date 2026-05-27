@@ -149,6 +149,7 @@ class UploadUrlRequest(BaseModel):
     order_id:     str
     filename:     str = Field(..., description="原始檔案名稱（含副檔名）")
     content_type: str = Field("text/plain", description="MIME type")
+    file_size:    int = Field(..., description="File size in bytes")
 
 class UploadUrlResponse(BaseModel):
     signed_url: str

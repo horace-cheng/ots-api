@@ -27,6 +27,8 @@ def files_client(mock_db):
     with (
         patch("routers.files.generate_upload_signed_url", return_value=(SIGNED_URL, GCS_PATH)),
         patch("routers.files.generate_download_signed_url", return_value=SIGNED_URL),
+        patch("routers.files._check_file_size", return_value=1000),
+        patch("routers.files._check_order_total_size"),
     ):
         yield TestClient(app)
 
@@ -39,6 +41,7 @@ class TestGetUploadUrl:
             "order_id": "order-001",
             "filename": "doc.exe",
             "content_type": "application/x-msdownload",
+            "file_size": 1000,
         })
         assert resp.status_code == 400
         assert "Unsupported content type" in resp.json()["detail"]
@@ -50,6 +53,7 @@ class TestGetUploadUrl:
             "order_id": "nonexistent",
             "filename": "doc.docx",
             "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "file_size": 1000,
         })
         assert resp.status_code == 404
 
@@ -62,6 +66,7 @@ class TestGetUploadUrl:
             "order_id": "order-001",
             "filename": "doc.docx",
             "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "file_size": 1000,
         })
         assert resp.status_code == 400
         assert "pending_payment" in resp.json()["detail"]
@@ -75,6 +80,7 @@ class TestGetUploadUrl:
             "order_id": "order-001",
             "filename": "doc.docx",
             "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "file_size": 1000,
         })
         assert resp.status_code == 200
         data = resp.json()
@@ -91,6 +97,7 @@ class TestGetUploadUrl:
             "order_id": "order-001",
             "filename": "source.txt",
             "content_type": "text/plain",
+            "file_size": 1000,
         })
         assert resp.status_code == 200
 
@@ -104,8 +111,24 @@ class TestGetUploadUrl:
             "order_id": "order-001",
             "filename": "manuscript.docx",
             "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "file_size": 1000,
         })
         assert resp.status_code == 200
+
+    def test_file_size_exceeds_limit_returns_400(self, files_client, mock_db):
+        """Reject files larger than MAX_FILE_SIZE at signed URL generation."""
+        row = MagicMock()
+        row.status = "paid"
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        resp = files_client.post("/files/upload-url", json={
+            "order_id": "order-001",
+            "filename": "huge.docx",
+            "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "file_size": 3 * 1024 * 1024,
+        })
+        assert resp.status_code == 400
+        assert "size limit" in resp.json()["detail"]
 
 
 # ── POST /files/{order_id}/confirm ───────────────────────────────────────────
