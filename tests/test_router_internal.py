@@ -58,6 +58,8 @@ class TestGetOrderInternal:
 # ── POST /internal/notify ─────────────────────────────────────────────────────
 
 class TestNotifyInternal:
+    pytestmark = pytest.mark.usefixtures("mock_notification_publisher")
+
     def test_unknown_type_returns_ok(self, internal_client):
         resp = internal_client.post("/internal/notify", json={
             "type": "some_event",

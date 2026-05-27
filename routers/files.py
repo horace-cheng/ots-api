@@ -240,6 +240,35 @@ async def get_bilingual_download_url(
     return DownloadUrlResponse(signed_url=signed_url, expires_in=3600)
 
 
+# ── GET /files/{order_id}/plain-text-download-url ──────────────────────────────
+@router.get("/{order_id}/plain-text-download-url", response_model=DownloadUrlResponse)
+async def get_plain_text_download_url(
+    order_id: str,
+    user: dict         = Depends(get_current_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    result = await db.execute(text("""
+        SELECT o.status, o.gcs_plain_text_output_path FROM orders o
+        JOIN users u ON u.id = o.user_id
+        WHERE o.id = :order_id AND u.uid_firebase = :uid
+    """), {"order_id": order_id, "uid": user["uid"]})
+
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if row.status != "delivered":
+        raise HTTPException(
+            status_code=400,
+            detail="Translation not yet delivered"
+        )
+    if not row.gcs_plain_text_output_path:
+        raise HTTPException(status_code=404, detail="Plain text output file not found")
+
+    signed_url = generate_download_signed_url(row.gcs_plain_text_output_path)
+
+    return DownloadUrlResponse(signed_url=signed_url, expires_in=3600)
+
+
 # ── Support Files (Literary Track) ───────────────────────────────────────────
 
 SUPPORT_CONTENT_TYPES = {

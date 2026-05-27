@@ -717,7 +717,25 @@ async def admin_get_bilingual_download_url(
     return DownloadUrlResponse(signed_url=signed_url, expires_in=3600)
 
 
-# ── Admin: 標記訂單已交付 ─────────────────────────────────────────────────────
+@router.get("/orders/{order_id}/plain-text-download-url", response_model=DownloadUrlResponse)
+async def admin_get_plain_text_download_url(
+    order_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    result = await db.execute(text("""
+        SELECT o.gcs_plain_text_output_path FROM orders o WHERE o.id = :order_id
+    """), {"order_id": order_id})
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if not row.gcs_plain_text_output_path:
+        raise HTTPException(status_code=404, detail="Plain text output file not found")
+    signed_url = generate_download_signed_url(row.gcs_plain_text_output_path)
+    return DownloadUrlResponse(signed_url=signed_url, expires_in=3600)
+
+
+# ── Admin: 標記訂單已交付 ────────────────────────────────────────────────────
 @router.post("/orders/{order_id}/deliver", response_model=MessageResponse)
 async def mark_delivered(
     order_id:       str,

@@ -128,6 +128,7 @@ class OrderDetail(BaseModel):
     invoice_no:         Optional[str]
     gcs_output_path:    Optional[str]
     gcs_bilingual_output_path: Optional[str] = None
+    gcs_plain_text_output_path: Optional[str] = None
     gcs_upload_path:    Optional[str] = None
     proofreader_notes:  Optional[str] = None
 
