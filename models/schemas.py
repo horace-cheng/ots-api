@@ -158,7 +158,7 @@ class UploadUrlResponse(BaseModel):
 
 class DownloadUrlResponse(BaseModel):
     signed_url: str
-    expires_in: int = 3600
+    expires_in: int = 900
 
 class OriginalContentResponse(BaseModel):
     filename: str
