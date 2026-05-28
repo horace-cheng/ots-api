@@ -450,3 +450,18 @@ class TokenUsageResponse(BaseModel):
     total_tokens:      int
     total_cost_usd:    float
     breakdown:         list[TokenUsageItem]
+
+class TokenUsageDetailItem(BaseModel):
+    job_type:          str
+    model:             str
+    prompt_tokens:     int
+    candidates_tokens: int
+    total_tokens:      int
+    input_rate:        float
+    output_rate:       float
+    cost_usd:          float
+    created_at:        datetime
+
+class TokenUsageDetailResponse(BaseModel):
+    order_id:          str
+    items:             list[TokenUsageDetailItem]

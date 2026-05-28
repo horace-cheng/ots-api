@@ -1360,3 +1360,65 @@ class TestAdminTokenUsage:
 
         assert resp.status_code == 404
         assert "No token usage data" in resp.json()["detail"]
+
+
+class TestAdminTokenUsageDetail:
+
+    def _make_row(self, job_type, model, prompt, candidates, cost,
+                  input_rate=0, output_rate=0, created_at=None):
+        from datetime import datetime, timezone
+        row = MagicMock()
+        row.job_type = job_type
+        row.model = model
+        row.prompt_tokens = prompt
+        row.candidates_tokens = candidates
+        row.total_tokens = prompt + candidates
+        row.input_rate = input_rate
+        row.output_rate = output_rate
+        row.cost_usd = cost
+        row.created_at = created_at or datetime.now(timezone.utc)
+        return row
+
+    def test_returns_detail_rows(self, admin_client, mock_db):
+        rows = [
+            self._make_row("nmt", "gemini-2.5-pro", 100, 50, 0.001, 1.25, 10.0),
+            self._make_row("nmt", "gemini-2.5-pro", 200, 80, 0.002, 1.25, 10.0),
+            self._make_row("qa_auto", "gemini-2.5-flash", 30, 60, 0.0001, 0.30, 2.50),
+        ]
+        mock_db.execute.return_value.fetchall.return_value = rows
+
+        resp = admin_client.get("/admin/orders/order-001/token-usage-detail")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["order_id"] == "order-001"
+        assert len(data["items"]) == 3
+
+        first = data["items"][0]
+        assert first["job_type"] == "nmt"
+        assert first["prompt_tokens"] == 100
+        assert first["candidates_tokens"] == 50
+        assert first["total_tokens"] == 150
+        assert first["input_rate"] == 1.25
+        assert first["output_rate"] == 10.0
+        assert first["cost_usd"] == pytest.approx(0.001, rel=1e-4)
+
+    def test_no_data_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchall.return_value = []
+
+        resp = admin_client.get("/admin/orders/order-002/token-usage-detail")
+
+        assert resp.status_code == 404
+        assert "No token usage data" in resp.json()["detail"]
+
+    def test_missing_table_returns_404(self, admin_client, mock_db):
+        mock_db.execute.side_effect = ProgrammingError(
+            statement="SELECT ... FROM token_usage",
+            params={},
+            orig=Exception("relation \"token_usage\" does not exist"),
+        )
+
+        resp = admin_client.get("/admin/orders/order-003/token-usage-detail")
+
+        assert resp.status_code == 404
+        assert "No token usage data" in resp.json()["detail"]

@@ -30,6 +30,7 @@ from models.schemas import (
     EditorAssignRequest,
     SupportFileResponse, SupportFileListResponse,
     TokenUsageResponse, TokenUsageItem,
+    TokenUsageDetailResponse, TokenUsageDetailItem,
 )
 from services.payment import (
     get_payment_gateway, InvoiceRequest, InvoiceType, InvoiceError
@@ -793,6 +794,48 @@ async def admin_get_token_usage(
         total_tokens=total_tokens,
         total_cost_usd=round(total_cost, 6),
         breakdown=breakdown,
+    )
+
+
+@router.get("/orders/{order_id}/token-usage-detail", response_model=TokenUsageDetailResponse)
+async def admin_get_token_usage_detail(
+    order_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Return individual token-usage rows for an order (not aggregated)."""
+    try:
+        result = await db.execute(text("""
+            SELECT
+                job_type, model,
+                prompt_tokens, candidates_tokens, total_tokens,
+                input_rate, output_rate, cost_usd, created_at
+            FROM token_usage
+            WHERE order_id = :order_id
+            ORDER BY created_at
+        """), {"order_id": order_id})
+    except ProgrammingError:
+        raise HTTPException(status_code=404, detail="No token usage data for this order")
+    items = result.fetchall()
+    if not items:
+        raise HTTPException(status_code=404, detail="No token usage data for this order")
+
+    return TokenUsageDetailResponse(
+        order_id=order_id,
+        items=[
+            TokenUsageDetailItem(
+                job_type=r.job_type,
+                model=r.model,
+                prompt_tokens=r.prompt_tokens,
+                candidates_tokens=r.candidates_tokens,
+                total_tokens=r.total_tokens,
+                input_rate=float(r.input_rate),
+                output_rate=float(r.output_rate),
+                cost_usd=round(float(r.cost_usd), 6),
+                created_at=r.created_at,
+            )
+            for r in items
+        ],
     )
 
 
