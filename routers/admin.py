@@ -800,11 +800,21 @@ async def admin_get_token_usage(
 @router.get("/orders/{order_id}/token-usage-detail", response_model=TokenUsageDetailResponse)
 async def admin_get_token_usage_detail(
     order_id: str,
-    admin: dict        = Depends(get_admin_user),
-    db:   AsyncSession = Depends(get_db),
+    limit:  int            = Query(50, ge=1, le=500),
+    offset: int            = Query(0, ge=0),
+    admin:  dict           = Depends(get_admin_user),
+    db:     AsyncSession   = Depends(get_db),
 ):
-    """Return individual token-usage rows for an order (not aggregated)."""
+    """Return individual token-usage rows for an order with pagination."""
     try:
+        count_res = await db.execute(text("""
+            SELECT COUNT(*) FROM token_usage WHERE order_id = :order_id
+        """), {"order_id": order_id})
+        total = count_res.scalar() or 0
+
+        if total == 0:
+            raise HTTPException(status_code=404, detail="No token usage data for this order")
+
         result = await db.execute(text("""
             SELECT
                 job_type, model,
@@ -813,15 +823,15 @@ async def admin_get_token_usage_detail(
             FROM token_usage
             WHERE order_id = :order_id
             ORDER BY created_at
-        """), {"order_id": order_id})
+            LIMIT :limit OFFSET :offset
+        """), {"order_id": order_id, "limit": limit, "offset": offset})
     except ProgrammingError:
         raise HTTPException(status_code=404, detail="No token usage data for this order")
     items = result.fetchall()
-    if not items:
-        raise HTTPException(status_code=404, detail="No token usage data for this order")
 
     return TokenUsageDetailResponse(
         order_id=order_id,
+        total=total,
         items=[
             TokenUsageDetailItem(
                 job_type=r.job_type,

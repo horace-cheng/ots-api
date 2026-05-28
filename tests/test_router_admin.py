@@ -1379,19 +1379,36 @@ class TestAdminTokenUsageDetail:
         row.created_at = created_at or datetime.now(timezone.utc)
         return row
 
+    def _make_handler(self, rows, limit=None, offset=None):
+        """Return an execute side_effect handler: first call returns COUNT, second returns data rows."""
+        count_mock = MagicMock()
+        count_mock.scalar.return_value = len(rows)
+        data_mock = MagicMock()
+        if limit is not None:
+            data_mock.fetchall.return_value = rows[offset:offset + limit]
+        else:
+            data_mock.fetchall.return_value = rows
+        calls = [count_mock, data_mock]
+
+        def handler(*args, **kwargs):
+            return calls.pop(0)
+        return handler, len(rows)
+
     def test_returns_detail_rows(self, admin_client, mock_db):
         rows = [
             self._make_row("nmt", "gemini-2.5-pro", 100, 50, 0.001, 1.25, 10.0),
             self._make_row("nmt", "gemini-2.5-pro", 200, 80, 0.002, 1.25, 10.0),
             self._make_row("qa_auto", "gemini-2.5-flash", 30, 60, 0.0001, 0.30, 2.50),
         ]
-        mock_db.execute.return_value.fetchall.return_value = rows
+        handler, total = self._make_handler(rows)
+        mock_db.execute.side_effect = handler
 
         resp = admin_client.get("/admin/orders/order-001/token-usage-detail")
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["order_id"] == "order-001"
+        assert data["total"] == total
         assert len(data["items"]) == 3
 
         first = data["items"][0]
@@ -1403,8 +1420,24 @@ class TestAdminTokenUsageDetail:
         assert first["output_rate"] == 10.0
         assert first["cost_usd"] == pytest.approx(0.001, rel=1e-4)
 
+    def test_detail_pagination(self, admin_client, mock_db):
+        rows = [self._make_row("nmt", "gemini-2.5-pro", i * 100, i * 50, 0.001, 1.25, 10.0)
+                for i in range(20)]
+        handler, total = self._make_handler(rows, limit=5, offset=5)
+        mock_db.execute.side_effect = handler
+
+        resp = admin_client.get("/admin/orders/order-001/token-usage-detail?limit=5&offset=5")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 20
+        assert len(data["items"]) == 5
+        assert data["items"][0]["prompt_tokens"] == 500  # row index 5: 5*100 = 500
+
     def test_no_data_returns_404(self, admin_client, mock_db):
-        mock_db.execute.return_value.fetchall.return_value = []
+        count_mock = MagicMock()
+        count_mock.scalar.return_value = 0
+        mock_db.execute.return_value = count_mock
 
         resp = admin_client.get("/admin/orders/order-002/token-usage-detail")
 
