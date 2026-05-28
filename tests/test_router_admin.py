@@ -8,6 +8,7 @@ from core.database import get_db
 from routers.auth import get_admin_user
 from routers.admin import router
 from tests.factories import MOCK_ADMIN_USER
+from sqlalchemy.exc import ProgrammingError
 
 pytestmark = pytest.mark.usefixtures("mock_notification_publisher")
 
@@ -1336,6 +1337,18 @@ class TestAdminTokenUsage:
         mock_db.execute.return_value.fetchall.return_value = []
 
         resp = admin_client.get("/admin/orders/order-002/token-usage")
+
+        assert resp.status_code == 404
+        assert "No token usage data" in resp.json()["detail"]
+
+    def test_missing_table_returns_404(self, admin_client, mock_db):
+        mock_db.execute.side_effect = ProgrammingError(
+            statement="SELECT ... FROM token_usage",
+            params={},
+            orig=Exception("relation \"token_usage\" does not exist"),
+        )
+
+        resp = admin_client.get("/admin/orders/order-003/token-usage")
 
         assert resp.status_code == 404
         assert "No token usage data" in resp.json()["detail"]

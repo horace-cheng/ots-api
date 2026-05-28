@@ -9,6 +9,7 @@ QA 審閱、手動付款確認、Literary Track 指派。
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 from datetime import datetime, timezone
 import logging
 
@@ -744,19 +745,22 @@ async def admin_get_token_usage(
     db:   AsyncSession = Depends(get_db),
 ):
     """Return aggregated token usage and cost for an order, grouped by job_type and model."""
-    result = await db.execute(text("""
-        SELECT
-            job_type,
-            model,
-            SUM(prompt_tokens)     AS prompt_tokens,
-            SUM(candidates_tokens) AS candidates_tokens,
-            SUM(total_tokens)      AS total_tokens,
-            SUM(cost_usd)          AS cost_usd
-        FROM token_usage
-        WHERE order_id = :order_id
-        GROUP BY job_type, model
-        ORDER BY job_type
-    """), {"order_id": order_id})
+    try:
+        result = await db.execute(text("""
+            SELECT
+                job_type,
+                model,
+                SUM(prompt_tokens)     AS prompt_tokens,
+                SUM(candidates_tokens) AS candidates_tokens,
+                SUM(total_tokens)      AS total_tokens,
+                SUM(cost_usd)          AS cost_usd
+            FROM token_usage
+            WHERE order_id = :order_id
+            GROUP BY job_type, model
+            ORDER BY job_type
+        """), {"order_id": order_id})
+    except ProgrammingError:
+        raise HTTPException(status_code=404, detail="No token usage data for this order")
     items = result.fetchall()
     if not items:
         raise HTTPException(status_code=404, detail="No token usage data for this order")
