@@ -28,6 +28,7 @@ from models.schemas import (
     QASegment, QASegmentListResponse, QASegmentsBatchUpdate,
     EditorAssignRequest,
     SupportFileResponse, SupportFileListResponse,
+    TokenUsageResponse, TokenUsageItem,
 )
 from services.payment import (
     get_payment_gateway, InvoiceRequest, InvoiceType, InvoiceError
@@ -733,6 +734,58 @@ async def admin_get_plain_text_download_url(
         raise HTTPException(status_code=404, detail="Plain text output file not found")
     signed_url = generate_download_signed_url(row.gcs_plain_text_output_path)
     return DownloadUrlResponse(signed_url=signed_url, expires_in=3600)
+
+
+# ── Admin: Token Usage ───────────────────────────────────────────────────────
+@router.get("/orders/{order_id}/token-usage", response_model=TokenUsageResponse)
+async def admin_get_token_usage(
+    order_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Return aggregated token usage and cost for an order, grouped by job_type and model."""
+    result = await db.execute(text("""
+        SELECT
+            job_type,
+            model,
+            SUM(prompt_tokens)     AS prompt_tokens,
+            SUM(candidates_tokens) AS candidates_tokens,
+            SUM(total_tokens)      AS total_tokens,
+            SUM(cost_usd)          AS cost_usd
+        FROM token_usage
+        WHERE order_id = :order_id
+        GROUP BY job_type, model
+        ORDER BY job_type
+    """), {"order_id": order_id})
+    items = result.fetchall()
+    if not items:
+        raise HTTPException(status_code=404, detail="No token usage data for this order")
+
+    total_prompt = total_candidates = total_tokens = 0
+    total_cost = 0.0
+    breakdown = []
+    for r in items:
+        total_prompt += r.prompt_tokens
+        total_candidates += r.candidates_tokens
+        total_tokens += r.total_tokens
+        total_cost += r.cost_usd
+        breakdown.append(TokenUsageItem(
+            job_type=r.job_type,
+            model=r.model,
+            prompt_tokens=r.prompt_tokens,
+            candidates_tokens=r.candidates_tokens,
+            total_tokens=r.total_tokens,
+            cost_usd=round(r.cost_usd, 6),
+        ))
+
+    return TokenUsageResponse(
+        order_id=order_id,
+        total_prompt=total_prompt,
+        total_candidates=total_candidates,
+        total_tokens=total_tokens,
+        total_cost_usd=round(total_cost, 6),
+        breakdown=breakdown,
+    )
 
 
 # ── Admin: 標記訂單已交付 ────────────────────────────────────────────────────

@@ -1294,3 +1294,48 @@ class TestAdminSupportFiles:
         resp = admin_client.get("/admin/orders/order-001/support-files/nonexistent/content")
 
         assert resp.status_code == 404
+
+
+class TestAdminTokenUsage:
+
+    def _make_fetchall_row(self, job_type, model, prompt, candidates, cost):
+        row = MagicMock()
+        row.job_type = job_type
+        row.model = model
+        row.prompt_tokens = prompt
+        row.candidates_tokens = candidates
+        row.total_tokens = prompt + candidates
+        row.cost_usd = cost
+        return row
+
+    def test_returns_aggregated_data(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchall.return_value = [
+            self._make_fetchall_row("nmt", "gemini-2.5-pro", 12000, 6000, 0.075),
+            self._make_fetchall_row("qa_auto", "gemini-2.5-flash", 340, 780, 0.00069),
+        ]
+
+        resp = admin_client.get("/admin/orders/order-001/token-usage")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["order_id"] == "order-001"
+        assert data["total_prompt"] == 12340
+        assert data["total_candidates"] == 6780
+        assert data["total_tokens"] == 19120
+        assert data["total_cost_usd"] == pytest.approx(0.07569, rel=1e-4)
+        assert len(data["breakdown"]) == 2
+
+        nmt = [b for b in data["breakdown"] if b["job_type"] == "nmt"][0]
+        assert nmt["model"] == "gemini-2.5-pro"
+        assert nmt["prompt_tokens"] == 12000
+        assert nmt["candidates_tokens"] == 6000
+        assert nmt["total_tokens"] == 18000
+        assert nmt["cost_usd"] == pytest.approx(0.075, rel=1e-4)
+
+    def test_no_data_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchall.return_value = []
+
+        resp = admin_client.get("/admin/orders/order-002/token-usage")
+
+        assert resp.status_code == 404
+        assert "No token usage data" in resp.json()["detail"]

@@ -430,3 +430,21 @@ class SupportedLanguageResponse(BaseModel):
     label_zh:         str
     label_en:         str
     default_direction: str
+
+
+# ── Token Usage ───────────────────────────────────────────────────────────────
+class TokenUsageItem(BaseModel):
+    job_type:         str
+    model:            str
+    prompt_tokens:    int
+    candidates_tokens: int
+    total_tokens:     int
+    cost_usd:         float
+
+class TokenUsageResponse(BaseModel):
+    order_id:          str
+    total_prompt:      int
+    total_candidates:  int
+    total_tokens:      int
+    total_cost_usd:    float
+    breakdown:         list[TokenUsageItem]
