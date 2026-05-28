@@ -1059,6 +1059,8 @@ async def update_user(
 @router.get("/orders/{order_id}/segments", response_model=QASegmentListResponse)
 async def get_order_segments(
     order_id: str,
+    limit:  int        = Query(50, ge=1, le=200),
+    offset: int        = Query(0, ge=0),
     admin: dict        = Depends(get_admin_user),
     db:   AsyncSession = Depends(get_db),
 ):
@@ -1116,7 +1118,9 @@ async def get_order_segments(
             flags           = flags_map.get(idx, []),
         ))
 
-    return QASegmentListResponse(segments=res_segments)
+    total = len(res_segments)
+    sliced = res_segments[offset:offset + limit]
+    return QASegmentListResponse(segments=sliced, total=total)
 
 
 @router.patch("/orders/{order_id}/segments", response_model=MessageResponse)

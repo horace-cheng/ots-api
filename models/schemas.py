@@ -297,6 +297,7 @@ class QASegment(BaseModel):
 
 class QASegmentListResponse(BaseModel):
     segments: List[QASegment]
+    total:    int = 0
 
 class QASegmentUpdate(BaseModel):
     index:      int
