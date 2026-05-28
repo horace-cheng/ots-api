@@ -772,7 +772,7 @@ async def admin_get_token_usage(
         total_prompt += r.prompt_tokens
         total_candidates += r.candidates_tokens
         total_tokens += r.total_tokens
-        total_cost += r.cost_usd
+        total_cost += float(r.cost_usd)
         breakdown.append(TokenUsageItem(
             job_type=r.job_type,
             model=r.model,
