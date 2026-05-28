@@ -434,12 +434,14 @@ class SupportedLanguageResponse(BaseModel):
 
 # ── Token Usage ───────────────────────────────────────────────────────────────
 class TokenUsageItem(BaseModel):
-    job_type:         str
-    model:            str
-    prompt_tokens:    int
+    job_type:          str
+    model:             str
+    prompt_tokens:     int
     candidates_tokens: int
-    total_tokens:     int
-    cost_usd:         float
+    total_tokens:      int
+    input_rate:        float
+    output_rate:       float
+    cost_usd:          float
 
 class TokenUsageResponse(BaseModel):
     order_id:          str

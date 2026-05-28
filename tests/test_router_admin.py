@@ -1299,7 +1299,7 @@ class TestAdminSupportFiles:
 
 class TestAdminTokenUsage:
 
-    def _make_fetchall_row(self, job_type, model, prompt, candidates, cost):
+    def _make_fetchall_row(self, job_type, model, prompt, candidates, cost, input_rate=0, output_rate=0):
         row = MagicMock()
         row.job_type = job_type
         row.model = model
@@ -1307,12 +1307,14 @@ class TestAdminTokenUsage:
         row.candidates_tokens = candidates
         row.total_tokens = prompt + candidates
         row.cost_usd = cost
+        row.input_rate = input_rate
+        row.output_rate = output_rate
         return row
 
     def test_returns_aggregated_data(self, admin_client, mock_db):
         mock_db.execute.return_value.fetchall.return_value = [
-            self._make_fetchall_row("nmt", "gemini-2.5-pro", 12000, 6000, 0.075),
-            self._make_fetchall_row("qa_auto", "gemini-2.5-flash", 340, 780, 0.00069),
+            self._make_fetchall_row("nmt", "gemini-2.5-pro", 12000, 6000, 0.075, input_rate=1.25, output_rate=10.0),
+            self._make_fetchall_row("qa_auto", "gemini-2.5-flash", 340, 780, 0.00069, input_rate=0.30, output_rate=2.50),
         ]
 
         resp = admin_client.get("/admin/orders/order-001/token-usage")
@@ -1331,7 +1333,13 @@ class TestAdminTokenUsage:
         assert nmt["prompt_tokens"] == 12000
         assert nmt["candidates_tokens"] == 6000
         assert nmt["total_tokens"] == 18000
+        assert nmt["input_rate"] == 1.25
+        assert nmt["output_rate"] == 10.0
         assert nmt["cost_usd"] == pytest.approx(0.075, rel=1e-4)
+
+        qa = [b for b in data["breakdown"] if b["job_type"] == "qa_auto"][0]
+        assert qa["input_rate"] == 0.30
+        assert qa["output_rate"] == 2.50
 
     def test_no_data_returns_404(self, admin_client, mock_db):
         mock_db.execute.return_value.fetchall.return_value = []

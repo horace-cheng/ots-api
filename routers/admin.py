@@ -753,7 +753,9 @@ async def admin_get_token_usage(
                 SUM(prompt_tokens)     AS prompt_tokens,
                 SUM(candidates_tokens) AS candidates_tokens,
                 SUM(total_tokens)      AS total_tokens,
-                SUM(cost_usd)          AS cost_usd
+                SUM(cost_usd)          AS cost_usd,
+                MAX(input_rate)        AS input_rate,
+                MAX(output_rate)       AS output_rate
             FROM token_usage
             WHERE order_id = :order_id
             GROUP BY job_type, model
@@ -779,7 +781,9 @@ async def admin_get_token_usage(
             prompt_tokens=r.prompt_tokens,
             candidates_tokens=r.candidates_tokens,
             total_tokens=r.total_tokens,
-            cost_usd=round(r.cost_usd, 6),
+            input_rate=float(r.input_rate),
+            output_rate=float(r.output_rate),
+            cost_usd=round(float(r.cost_usd), 6),
         ))
 
     return TokenUsageResponse(
