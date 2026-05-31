@@ -487,8 +487,18 @@ async def get_lt_order_segments(
         ))
 
     total = len(res_segments)
+
+    must_fix_indices = sorted({
+        r.paragraph_index for r in flags_rows
+        if r.flag_level == "must_fix" and not r.resolved
+    })
+
     sliced = res_segments[offset:offset + limit]
-    return QASegmentListResponse(segments=sliced, total=total)
+    return QASegmentListResponse(
+        segments=sliced, total=total,
+        total_must_fix=len(must_fix_indices),
+        must_fix_indices=must_fix_indices,
+    )
 
 
 @router.patch("/lt/orders/{order_id}/segments", response_model=MessageResponse)

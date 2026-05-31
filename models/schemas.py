@@ -296,8 +296,10 @@ class QASegment(BaseModel):
     flags:          List[QAFlagResponse] = []
 
 class QASegmentListResponse(BaseModel):
-    segments: List[QASegment]
-    total:    int = 0
+    segments:        List[QASegment]
+    total:           int = 0
+    total_must_fix:  int = 0
+    must_fix_indices: List[int] = []
 
 class QASegmentUpdate(BaseModel):
     index:      int
