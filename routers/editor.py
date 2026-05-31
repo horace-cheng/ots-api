@@ -493,11 +493,14 @@ async def get_lt_order_segments(
         if r.flag_level == "must_fix" and not r.resolved
     })
 
+    all_flags = [QAFlagResponse(**dict(r._mapping)) for r in flags_rows]
+
     sliced = res_segments[offset:offset + limit]
     return QASegmentListResponse(
         segments=sliced, total=total,
         total_must_fix=len(must_fix_indices),
         must_fix_indices=must_fix_indices,
+        all_flags=all_flags,
     )
 
 

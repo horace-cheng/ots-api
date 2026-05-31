@@ -300,6 +300,7 @@ class QASegmentListResponse(BaseModel):
     total:           int = 0
     total_must_fix:  int = 0
     must_fix_indices: List[int] = []
+    all_flags:       List[QAFlagResponse] = []
 
 class QASegmentUpdate(BaseModel):
     index:      int
