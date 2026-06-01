@@ -11,10 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 from datetime import datetime, timezone
+import json
 import logging
 
 from core.database import get_db
 from core import storage
+from core.config import settings
 from core.storage import generate_download_signed_url, read_blob
 from services.document_converter import convert_document
 from routers.auth import get_admin_user
@@ -736,6 +738,92 @@ async def admin_get_plain_text_download_url(
         raise HTTPException(status_code=404, detail="Plain text output file not found")
     signed_url = generate_download_signed_url(row.gcs_plain_text_output_path)
     return DownloadUrlResponse(signed_url=signed_url, expires_in=3600)
+
+
+# ── Admin: Pipeline Progress ─────────────────────────────────────────────────
+CHECKPOINT_BATCH_PREFIX = "checkpoint_batch_"
+
+
+@router.get("/orders/{order_id}/pipeline-progress")
+async def admin_get_pipeline_progress(
+    order_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Return NMT batch translation progress by reading pipeline GCS artifacts.
+
+    Returns:
+      status: "no_batches" | "in_progress" | "complete"
+      total_batches / completed_batches: batch-level counts
+      total_segments / completed_segments: segment-level counts
+    """
+    # Verify order exists
+    result = await db.execute(text("SELECT 1 FROM orders WHERE id = :order_id"), {"order_id": order_id})
+    if not result.fetchone():
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    client = storage.get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+
+    # Read batches.json for total batch count
+    try:
+        batches_blob = bucket.blob(f"pipeline/{order_id}/batches.json")
+        if not batches_blob.exists():
+            return {
+                "status": "no_batches",
+                "total_batches": 0, "completed_batches": 0,
+                "total_segments": 0, "completed_segments": 0,
+            }
+        batches_data = json.loads(batches_blob.download_as_text())
+        total_batches = len(batches_data) if isinstance(batches_data, list) else 0
+    except Exception:
+        return {
+            "status": "no_batches",
+            "total_batches": 0, "completed_batches": 0,
+            "total_segments": 0, "completed_segments": 0,
+        }
+
+    # Count checkpoint blobs for completed batches
+    prefix = f"pipeline/{order_id}/{CHECKPOINT_BATCH_PREFIX}"
+    checkpoints = list(bucket.list_blobs(prefix=prefix))
+    completed_batches = len(checkpoints)
+
+    # Read segments.json for total segments
+    try:
+        segs_blob = bucket.blob(f"pipeline/{order_id}/segments.json")
+        if segs_blob.exists():
+            segs_data = json.loads(segs_blob.download_as_text())
+            total_segments = len(segs_data) if isinstance(segs_data, list) else 0
+        else:
+            total_segments = 0
+    except Exception:
+        total_segments = 0
+
+    # Sum non-empty translations from all checkpoints
+    completed_segments = 0
+    for cp in checkpoints:
+        try:
+            data = json.loads(cp.download_as_text())
+            translations = data.get("translations", [])
+            completed_segments += sum(1 for t in translations if t)
+        except Exception:
+            pass
+
+    # Determine overall status
+    if total_batches == 0:
+        status = "no_batches"
+    elif completed_batches >= total_batches:
+        status = "complete"
+    else:
+        status = "in_progress"
+
+    return {
+        "status": status,
+        "total_batches": total_batches,
+        "completed_batches": completed_batches,
+        "total_segments": total_segments,
+        "completed_segments": completed_segments,
+    }
 
 
 # ── Admin: Token Usage ───────────────────────────────────────────────────────
