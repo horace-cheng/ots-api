@@ -1072,6 +1072,7 @@ async def get_order_segments(
     limit:  int        = Query(50, ge=1, le=200),
     offset: int        = Query(0, ge=0),
     q:        str        = Query("", description="Search keyword across source, translated, and comments"),
+    search_all: bool    = Query(False, description="If true, search across all segments before paginating"),
     admin: dict        = Depends(get_admin_user),
     db:   AsyncSession = Depends(get_db),
 ):
@@ -1129,7 +1130,7 @@ async def get_order_segments(
             flags           = flags_map.get(idx, []),
         ))
 
-    if q:
+    if search_all and q:
         q_lower = q.strip().lower()
         res_segments = [s for s in res_segments if (
             q_lower in (s.source or "").lower()
@@ -1137,10 +1138,23 @@ async def get_order_segments(
             or q_lower in (s.comments or "").lower()
             or q_lower in (s.editor_comments or "").lower()
         )]
+        total = len(res_segments)
+        sliced = res_segments[offset:offset + limit]
+        return QASegmentListResponse(segments=sliced, total=total)
 
-    total = len(res_segments)
+    total_unfiltered = len(res_segments)
     sliced = res_segments[offset:offset + limit]
-    return QASegmentListResponse(segments=sliced, total=total)
+
+    if q:
+        q_lower = q.strip().lower()
+        sliced = [s for s in sliced if (
+            q_lower in (s.source or "").lower()
+            or q_lower in (s.translated or "").lower()
+            or q_lower in (s.comments or "").lower()
+            or q_lower in (s.editor_comments or "").lower()
+        )]
+
+    return QASegmentListResponse(segments=sliced, total=total_unfiltered)
 
 
 @router.patch("/orders/{order_id}/segments", response_model=MessageResponse)
