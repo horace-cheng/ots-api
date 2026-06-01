@@ -273,6 +273,7 @@ async def get_assigned_order_segments(
     order_id: str,
     limit:  int        = Query(50, ge=1, le=200),
     offset: int        = Query(0, ge=0),
+    q:        str        = Query("", description="Search keyword across source, translated, and comments"),
     user:     dict       = Depends(get_reviewer_user),
     db:       AsyncSession = Depends(get_db),
 ):
@@ -332,6 +333,16 @@ async def get_assigned_order_segments(
             proofreader_comments = t.get("proofreader_comments"),
             flags      = flags_map.get(idx, []),
         ))
+
+    if q:
+        q_lower = q.strip().lower()
+        res_segments = [s for s in res_segments if (
+            q_lower in (s.source or "").lower()
+            or q_lower in (s.translated or "").lower()
+            or q_lower in (s.comments or "").lower()
+            or q_lower in (s.editor_comments or "").lower()
+            or q_lower in (s.proofreader_comments or "").lower()
+        )]
 
     total = len(res_segments)
     sliced = res_segments[offset:offset + limit]
@@ -425,6 +436,7 @@ async def get_lt_order_segments(
     order_id: str,
     limit:  int        = Query(50, ge=1, le=200),
     offset: int        = Query(0, ge=0),
+    q:        str        = Query("", description="Search keyword across source, translated, and comments"),
     role:     str        = Query("editor"),
     user:     dict       = Depends(get_lt_user),
     db:       AsyncSession = Depends(get_db),
@@ -485,6 +497,16 @@ async def get_lt_order_segments(
             proofreader_comments = t.get("proofreader_comments"),
             flags      = flags_map.get(idx, []),
         ))
+
+    if q:
+        q_lower = q.strip().lower()
+        res_segments = [s for s in res_segments if (
+            q_lower in (s.source or "").lower()
+            or q_lower in (s.translated or "").lower()
+            or q_lower in (s.comments or "").lower()
+            or q_lower in (s.editor_comments or "").lower()
+            or q_lower in (s.proofreader_comments or "").lower()
+        )]
 
     total = len(res_segments)
 
