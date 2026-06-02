@@ -104,8 +104,8 @@ async def trigger_deliver_job(order_id: str, track_type: str) -> str:
         # Fire-and-forget: don't call operation.result() — that polls for
         # completion and requires run.operations.get permission. The job is
         # already submitted.
-        logger.info(f"Deliver job triggered: order={order_id}, job={full_job_name}, operation={operation.name}")
-        return operation.name
+        logger.info(f"Deliver job triggered: order={order_id}, job={full_job_name}")
+        return order_id
 
     except Exception as e:
         logger.error(f"Failed to trigger deliver job for order {order_id}: {e}")
