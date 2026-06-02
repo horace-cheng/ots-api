@@ -72,45 +72,34 @@ async def trigger_deliver_job(order_id: str, track_type: str) -> str:
         raise ValueError(f"Unknown track type: {track_type}")
 
     try:
-        import google.auth
-        import google.auth.transport.urllib3
-        import httpx
-        import urllib3
+        from google.cloud.run_v2 import JobsClient
+        from google.cloud.run_v2.types import RunJobRequest, Overrides, ContainerOverride
 
-        creds, _ = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
-        auth_req = google.auth.transport.urllib3.Request(urllib3.PoolManager())
-        creds.refresh(auth_req)
-
-        region = settings.region
-        project_id = settings.project_id
         env = settings.env
+        project_id = settings.project_id
+        region = settings.region
         full_job_name = job_name.format(env=env)
-        parent = f"projects/{project_id}/locations/{region}"
-        url = f"https://{region}-run.googleapis.com/v2/{parent}/jobs/{full_job_name}:run"
+        name = f"projects/{project_id}/locations/{region}/jobs/{full_job_name}"
 
-        headers = {
-            "Authorization": f"Bearer {creds.token}",
-            "Content-Type": "application/json",
-        }
-        body = {
-            "overrides": {
-                "containerOverrides": [{
-                    "env": [
-                        {"name": "ORDER_ID", "value": order_id},
-                        {"name": "REDELIVER", "value": "true"},
-                    ]
-                }]
-            }
-        }
+        request = RunJobRequest(
+            name=name,
+            overrides=Overrides(
+                container_overrides=[
+                    ContainerOverride(
+                        env=[
+                            {"name": "ORDER_ID", "value": order_id},
+                            {"name": "REDELIVER", "value": "true"},
+                        ]
+                    )
+                ]
+            ),
+        )
 
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, headers=headers, json=body)
-        response.raise_for_status()
-        result = response.json()
+        client = JobsClient()
+        operation = await client.run_job(request=request)
+        result = operation.result()
         logger.info(f"Deliver job triggered: order={order_id}, job={full_job_name}")
-        return result.get("name", "")
+        return result.name
 
     except Exception as e:
         logger.error(f"Failed to trigger deliver job for order {order_id}: {e}")
