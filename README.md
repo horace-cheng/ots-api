@@ -45,8 +45,9 @@ API docs available at `http://localhost:8080/docs` (dev environment only).
 |---|---|
 | `DB_URL` | asyncpg connection string — use `localhost:5433` locally via proxy |
 | `ENV` | `dev` / `staging` / `production` |
-| `PAYMENT_GATEWAY` | `manual` / `ecpay` / `payuni` |
+| `PAYMENT_GATEWAY` | `manual` / `ecpay` / `payuni` / `stripe` — selects payment implementation |
 | `PROJECT_ID` | GCP project ID |
+| `REGION` | GCP region (e.g., `asia-east1`) — used by Cloud Run Jobs API for redeliver |
 | `GCS_UPLOADS_BUCKET` | GCS bucket for source file uploads |
 | `GCS_OUTPUTS_BUCKET` | GCS bucket for translated file downloads |
 | `PUBSUB_TOPIC` | Pub/Sub topic that triggers the translation pipeline |

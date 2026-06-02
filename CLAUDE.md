@@ -36,8 +36,9 @@ gcloud auth application-default login
 |---|---|
 | `DB_URL` | PostgreSQL asyncpg URL — localhost:5433 via proxy locally, Unix socket on Cloud Run |
 | `ENV` | `dev` / `staging` / `production` — controls CORS, SQL logging, docs visibility |
-| `PAYMENT_GATEWAY` | `manual` / `ecpay` / `payuni` — selects payment implementation |
+| `PAYMENT_GATEWAY` | `manual` / `ecpay` / `payuni` / `stripe` — selects payment implementation |
 | `PROJECT_ID` | GCP project (`ots-translation`) |
+| `REGION` | GCP region (`asia-east1`) — used by Cloud Run Jobs API |
 | `GCS_UPLOADS_BUCKET` / `GCS_OUTPUTS_BUCKET` | GCS buckets for file I/O |
 | `PUBSUB_TOPIC` | Pub/Sub topic to trigger the translation pipeline |
 
@@ -67,7 +68,15 @@ To add a new gateway: subclass `PaymentGateway` in a new file, implement all fou
 
 ### Routers (`routers/`)
 
-- **`payments.py`** — currently the only wired-up router (others commented out in `main.py`). The webhook endpoint (`POST /payments/webhook`) parses the callback, updates `payments` and `orders` tables via raw SQL, triggers the translation pipeline via Pub/Sub (`trigger_pipeline`), then auto-issues a B2C invoice (failure is non-fatal — logged, not re-raised).
+- **`payments.py`** — payment creation and webhook endpoint. `POST /payments/webhook` parses the callback, updates `payments` and `orders` tables via raw SQL, triggers the translation pipeline via Pub/Sub (`trigger_pipeline`), then auto-issues a B2C invoice (failure is non-fatal — logged, not re-raised).
+- **`admin.py`** — admin endpoints: order management, user management, language config, LT quotation/assignment/proofread, QA flag review, retranslate/redeliver.
+- **`orders.py`** — customer-facing order CRUD, file upload/download, payment flow.
+- **`auth.py`** — Firebase token verification, user profile.
+- **`editor.py`** — editor/proofreader workflow: LT editing, proofreading, assignment, QA.
+- **`files.py`** — signed URL generation for upload/download.
+- **`internal.py`** — internal notification handler (Pub/Sub push endpoint).
+- **`users.py`** — user admin endpoints.
+- **`schemas.py`** — schema retrieval and validation.
 
 **Stripe webhook note**: Unlike ECPay/PAYUNi (where the signature is in the form body), Stripe's signature verification requires the raw request body bytes and the `Stripe-Signature` header. The Stripe gateway's `parse_webhook()` expects an already-verified Stripe event dict — the router should call `stripe.Webhook.construct_event()` first.
 
