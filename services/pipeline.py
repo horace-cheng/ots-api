@@ -72,8 +72,9 @@ async def trigger_deliver_job(order_id: str, track_type: str) -> str:
         raise ValueError(f"Unknown track type: {track_type}")
 
     try:
+        import asyncio
         from google.cloud.run_v2 import JobsClient
-        from google.cloud.run_v2.types import RunJobRequest, Overrides, ContainerOverride
+        from google.cloud.run_v2.types import RunJobRequest, EnvVar
 
         env = settings.env
         project_id = settings.project_id
@@ -83,20 +84,23 @@ async def trigger_deliver_job(order_id: str, track_type: str) -> str:
 
         request = RunJobRequest(
             name=name,
-            overrides=Overrides(
+            overrides=RunJobRequest.Overrides(
                 container_overrides=[
-                    ContainerOverride(
+                    RunJobRequest.Overrides.ContainerOverride(
                         env=[
-                            {"name": "ORDER_ID", "value": order_id},
-                            {"name": "REDELIVER", "value": "true"},
+                            EnvVar(name="ORDER_ID", value=order_id),
+                            EnvVar(name="REDELIVER", value="true"),
                         ]
                     )
                 ]
             ),
         )
 
+        loop = asyncio.get_event_loop()
         client = JobsClient()
-        operation = await client.run_job(request=request)
+        operation = await loop.run_in_executor(
+            None, lambda: client.run_job(request=request)
+        )
         result = operation.result()
         logger.info(f"Deliver job triggered: order={order_id}, job={full_job_name}")
         return result.name
