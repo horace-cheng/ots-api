@@ -256,7 +256,7 @@ async def assign_qa_to_order(
         raise HTTPException(status_code=403, detail="Access denied")
 
     qa_res = await db.execute(text("""
-        SELECT 1 FROM users WHERE id = :qa_id AND :qa_id = ANY(roles)
+        SELECT user_id FROM user_roles WHERE user_id = :qa_id AND role = 'qa'
     """), {"qa_id": body.qa_id})
     if not qa_res.fetchone():
         raise HTTPException(status_code=400, detail="Specified user is not a QA")
