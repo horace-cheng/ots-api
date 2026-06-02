@@ -1413,7 +1413,7 @@ async def retrigger_pipeline(
     """), {"id": order_id})
 
     await db.execute(text("""
-        UPDATE orders SET status = 'processing' WHERE id = :id
+        UPDATE orders SET status = 'processing', delivered_at = NULL WHERE id = :id
     """), {"id": order_id})
     await db.commit()
 
