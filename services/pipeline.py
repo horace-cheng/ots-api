@@ -101,9 +101,11 @@ async def trigger_deliver_job(order_id: str, track_type: str) -> str:
         operation = await loop.run_in_executor(
             None, lambda: client.run_job(request=request)
         )
-        result = operation.result()
-        logger.info(f"Deliver job triggered: order={order_id}, job={full_job_name}")
-        return result.name
+        # Fire-and-forget: don't call operation.result() — that polls for
+        # completion and requires run.operations.get permission. The job is
+        # already submitted.
+        logger.info(f"Deliver job triggered: order={order_id}, job={full_job_name}, operation={operation.name}")
+        return operation.name
 
     except Exception as e:
         logger.error(f"Failed to trigger deliver job for order {order_id}: {e}")
