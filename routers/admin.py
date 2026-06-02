@@ -37,7 +37,7 @@ from models.schemas import (
 from services.payment import (
     get_payment_gateway, InvoiceRequest, InvoiceType, InvoiceError
 )
-from services.pipeline import trigger_pipeline
+from services.pipeline import trigger_pipeline, trigger_deliver_job
 from services.notification import publish_event_sync, EventType
 
 logger = logging.getLogger(__name__)
@@ -685,6 +685,16 @@ async def admin_get_order(
     return AdminOrderDetail(**dict(row._mapping))
 
 
+def _derive_delivery_path(gcs_path: str, suffix: str, new_ext: str) -> str | None:
+    """Derive a sibling delivery path (e.g. HTML → _bilingual.html or _plain.txt)."""
+    if not gcs_path:
+        return None
+    idx = gcs_path.rfind(".")
+    if idx == -1:
+        return None
+    return gcs_path[:idx] + suffix + "." + new_ext
+
+
 # ── Admin: 取得譯文下載 URL ───────────────────────────────────────────────────
 @router.get("/orders/{order_id}/download-url", response_model=DownloadUrlResponse)
 async def admin_get_download_url(
@@ -711,14 +721,19 @@ async def admin_get_bilingual_download_url(
     db:   AsyncSession = Depends(get_db),
 ):
     result = await db.execute(text("""
-        SELECT o.gcs_bilingual_output_path FROM orders o WHERE o.id = :order_id
+        SELECT o.gcs_output_path, o.gcs_bilingual_output_path FROM orders o WHERE o.id = :order_id
     """), {"order_id": order_id})
     row = result.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Order not found")
-    if not row.gcs_bilingual_output_path:
+
+    gcs_path = row.gcs_bilingual_output_path
+    if not gcs_path:
+        gcs_path = _derive_delivery_path(row.gcs_output_path, "_bilingual", "html")
+    if not gcs_path:
         raise HTTPException(status_code=404, detail="Bilingual output file not found")
-    signed_url = generate_download_signed_url(row.gcs_bilingual_output_path)
+
+    signed_url = generate_download_signed_url(gcs_path)
     return DownloadUrlResponse(signed_url=signed_url, expires_in=3600)
 
 
@@ -729,14 +744,19 @@ async def admin_get_plain_text_download_url(
     db:   AsyncSession = Depends(get_db),
 ):
     result = await db.execute(text("""
-        SELECT o.gcs_plain_text_output_path FROM orders o WHERE o.id = :order_id
+        SELECT o.gcs_output_path, o.gcs_plain_text_output_path FROM orders o WHERE o.id = :order_id
     """), {"order_id": order_id})
     row = result.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Order not found")
-    if not row.gcs_plain_text_output_path:
+
+    gcs_path = row.gcs_plain_text_output_path
+    if not gcs_path:
+        gcs_path = _derive_delivery_path(row.gcs_output_path, "_plain", "txt")
+    if not gcs_path:
         raise HTTPException(status_code=404, detail="Plain text output file not found")
-    signed_url = generate_download_signed_url(row.gcs_plain_text_output_path)
+
+    signed_url = generate_download_signed_url(gcs_path)
     return DownloadUrlResponse(signed_url=signed_url, expires_in=3600)
 
 
@@ -1421,6 +1441,33 @@ async def retrigger_pipeline(
 
     logger.info(f"Pipeline re-triggered by admin: order={order_id}")
     return MessageResponse(message=f"Pipeline re-triggered for order {order_id}")
+
+
+@router.post("/orders/{order_id}/redeliver", response_model=MessageResponse)
+async def redeliver(
+    order_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """
+    僅重新生成交付檔案（不重新翻譯）。
+    觸發 deliver Cloud Run Job 並傳入 REDELIVER=true。
+    """
+    result = await db.execute(text("""
+        SELECT id, track_type FROM orders WHERE id = :id
+    """), {"id": order_id})
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    try:
+        await trigger_deliver_job(order_id, row.track_type)
+    except Exception as e:
+        logger.error(f"Failed to trigger deliver job: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    logger.info(f"Deliver job re-triggered: order={order_id}, track={row.track_type}")
+    return MessageResponse(message="Deliver job triggered")
 
 
 @router.put("/users/{user_id}/languages", response_model=MessageResponse)

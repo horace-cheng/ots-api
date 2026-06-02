@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     # ── GCP ───────────────────────────────────────────────────────────────
     project_id: str          = os.environ.get("PROJECT_ID", "ots-translation")
     env: str                 = os.environ.get("ENV", "dev")
+    region: str              = os.environ.get("REGION", "asia-east1")
     gcs_uploads_bucket: str  = os.environ.get("GCS_UPLOADS_BUCKET", "")
     gcs_outputs_bucket: str  = os.environ.get("GCS_OUTPUTS_BUCKET", "")
     gcs_temp_bucket:    str  = os.environ.get("GCS_TEMP_BUCKET", "ots-translation-pipeline-temp-dev")

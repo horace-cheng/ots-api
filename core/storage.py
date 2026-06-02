@@ -136,3 +136,15 @@ def read_blob(gcs_path: str) -> tuple[bytes, str]:
     if not blob.exists():
         raise FileNotFoundError(f"Blob not found: {gcs_path}")
     return blob.download_as_bytes(), gcs_path.split("/")[-1]
+
+
+def write_output(order_id: str, filename: str, content: str, content_type: str = "text/plain") -> str:
+    """寫入最終交付檔案到 outputs bucket，回傳完整 gs:// path。"""
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_outputs_bucket)
+    gcs_path = f"orders/{order_id}/{filename}"
+    blob = bucket.blob(gcs_path)
+    blob.upload_from_string(content.encode("utf-8"), content_type=content_type)
+    full_path = f"gs://{settings.gcs_outputs_bucket}/{gcs_path}"
+    logger.info(f"Written output: {full_path}")
+    return full_path
