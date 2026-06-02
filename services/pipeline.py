@@ -73,13 +73,13 @@ async def trigger_deliver_job(order_id: str, track_type: str) -> str:
 
     try:
         import google.auth
-        import google.auth.transport.requests
-        import requests as http_requests
+        import google.auth.transport.urllib3
+        import httpx
 
         creds, _ = google.auth.default(
             scopes=["https://www.googleapis.com/auth/cloud-platform"]
         )
-        auth_req = google.auth.transport.requests.Request()
+        auth_req = google.auth.transport.urllib3.Request()
         creds.refresh(auth_req)
 
         region = settings.region
@@ -104,11 +104,8 @@ async def trigger_deliver_job(order_id: str, track_type: str) -> str:
             }
         }
 
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: http_requests.post(url, headers=headers, json=body)
-        )
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, headers=headers, json=body)
         response.raise_for_status()
         result = response.json()
         logger.info(f"Deliver job triggered: order={order_id}, job={full_job_name}")
