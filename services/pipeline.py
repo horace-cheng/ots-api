@@ -75,11 +75,12 @@ async def trigger_deliver_job(order_id: str, track_type: str) -> str:
         import google.auth
         import google.auth.transport.urllib3
         import httpx
+        import urllib3
 
         creds, _ = google.auth.default(
             scopes=["https://www.googleapis.com/auth/cloud-platform"]
         )
-        auth_req = google.auth.transport.urllib3.Request()
+        auth_req = google.auth.transport.urllib3.Request(urllib3.PoolManager())
         creds.refresh(auth_req)
 
         region = settings.region
