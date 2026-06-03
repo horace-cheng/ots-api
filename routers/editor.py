@@ -17,6 +17,11 @@ from core import storage
 from core.storage import read_blob
 from core.config import settings
 from routers.auth import get_editor_user, get_reviewer_user, get_lt_user
+from services.translation_versions import (
+    save_translation_version as svc_save_version,
+    list_versions as svc_list_versions,
+    diff_versions as svc_diff_versions,
+)
 from models.schemas import (
     OrderDetail, OrderListResponse,
     QASegment, QASegmentListResponse, QASegmentsBatchUpdate,
@@ -694,6 +699,8 @@ async def complete_lt_assignment(
                 detail=f"Segments {seg_nums} have QA flags but no comments. Please add comments before completing."
             )
 
+        await svc_save_version(db, order_id, source="editor", created_by=user["user_id"])
+
         await db.execute(text("""
             UPDATE assignments
             SET status = 'editor_done',
@@ -707,6 +714,8 @@ async def complete_lt_assignment(
                 status_code=400,
                 detail=f"Proofreader can only complete when status is 'proofreading', got '{assignment.status}'"
             )
+        await svc_save_version(db, order_id, source="proofreader", created_by=user["user_id"])
+
         await db.execute(text("""
             UPDATE assignments
             SET status = 'proofread_done',
@@ -1097,3 +1106,84 @@ async def lt_generate_sample_package(
         synopsis=synopsis,
         market_analysis=market_analysis,
     )
+
+
+# ── Literary Track: Version History (Read-only) ─────────────────────────────
+@router.get("/lt/orders/{order_id}/versions")
+async def lt_list_versions(
+    order_id: str,
+    user:   dict       = Depends(get_lt_user),
+    db:       AsyncSession = Depends(get_db),
+):
+    """List translation versions (read-only, for editor/proofreader)."""
+    return await svc_list_versions(db, order_id)
+
+
+@router.get("/lt/orders/{order_id}/versions/{version_id}/diff")
+async def lt_diff_versions(
+    order_id: str,
+    version_id: str,
+    against: str | None = None,
+    user:   dict       = Depends(get_lt_user),
+    db:       AsyncSession = Depends(get_db),
+):
+    """Diff a version against another (read-only)."""
+    if against is None:
+        result = await db.execute(text("""
+            SELECT id FROM translation_versions
+            WHERE order_id = :order_id AND id != :vid
+            ORDER BY version DESC LIMIT 1
+        """), {"order_id": order_id, "vid": version_id})
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="No other version to diff against")
+        against = row.id
+    try:
+        return await svc_diff_versions(db, order_id, version_id, str(against))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/lt/orders/{order_id}/versions/live/diff")
+async def lt_diff_live(
+    order_id: str,
+    against: str,
+    user:   dict       = Depends(get_lt_user),
+    db:       AsyncSession = Depends(get_db),
+):
+    """Diff current translations.json against a stored version (read-only)."""
+    from core.storage import read_temp_json
+    live = read_temp_json(order_id, "translations.json")
+    if not live:
+        raise HTTPException(status_code=404, detail="No current translations.json found")
+
+    result = await db.execute(text("""
+        SELECT gcs_path FROM translation_versions
+        WHERE id = :vid AND order_id = :order_id
+    """), {"vid": against, "order_id": order_id})
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    from services.translation_versions import gcs_download_content
+    import json
+    stored = json.loads(gcs_download_content(row.gcs_path))
+
+    def _build_diff(segs_a: list, segs_b: list) -> dict:
+        map_a = {s["index"]: s for s in segs_a}
+        map_b = {s["index"]: s for s in segs_b}
+        changed, added, removed = [], [], []
+        for idx in sorted(set(map_a) | set(map_b)):
+            a, b = map_a.get(idx), map_b.get(idx)
+            if a is None and b:
+                added.append({"index": idx, "source": b.get("source", ""), "text": b["translated"]})
+            elif a and b is None:
+                removed.append({"index": idx, "source": a.get("source", ""), "text": a["translated"]})
+            elif a and b and a.get("translated") != b.get("translated"):
+                changed.append({
+                    "index": idx, "source": a.get("source", ""),
+                    "old": a.get("translated", ""), "new": b.get("translated", ""),
+                })
+        return {"changed": changed, "added": added, "removed": removed}
+
+    return _build_diff(stored, live)

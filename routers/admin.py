@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 from datetime import datetime, timezone
+from uuid import UUID
 import json
 import logging
 
@@ -39,6 +40,12 @@ from services.payment import (
 )
 from services.pipeline import trigger_pipeline, trigger_deliver_job
 from services.notification import publish_event_sync, EventType
+from services.translation_versions import (
+    save_translation_version as svc_save_version,
+    list_versions as svc_list_versions,
+    restore_version as svc_restore_version,
+    diff_versions as svc_diff_versions,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -957,6 +964,119 @@ async def admin_get_token_usage_detail(
     )
 
 
+# ── Translation Version History ──────────────────────────────────────────────
+VERSION_SOURCE_MAP = {
+    "list": "manual", "save": "manual", "restore": "restored",
+}
+
+
+@router.get("/orders/{order_id}/versions")
+async def admin_list_versions(
+    order_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """List all translation versions for an order."""
+    return await svc_list_versions(db, order_id)
+
+
+@router.post("/orders/{order_id}/versions")
+async def admin_save_version(
+    order_id: str,
+    label: str | None = None,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Manually save a translation version snapshot."""
+    result = await svc_save_version(db, order_id, source="manual", label=label, created_by=str(admin["uid"]))
+    if not result:
+        raise HTTPException(status_code=404, detail="No translations.json found; pipeline may not have run yet")
+    return result
+
+
+@router.post("/orders/{order_id}/versions/{version_id}/restore")
+async def admin_restore_version(
+    order_id: str,
+    version_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Restore translations from a version snapshot."""
+    result = await svc_restore_version(db, order_id, version_id, restored_by=str(admin["uid"]))
+    if not result:
+        raise HTTPException(status_code=404, detail="Version not found")
+    return result
+
+
+@router.get("/orders/{order_id}/versions/{version_id}/diff")
+async def admin_diff_versions(
+    order_id: str,
+    version_id: str,
+    against: UUID | None = None,
+    admin: dict          = Depends(get_admin_user),
+    db:   AsyncSession   = Depends(get_db),
+):
+    """Diff a version against another version (or the latest if omitted)."""
+    if against is None:
+        result = await db.execute(text("""
+            SELECT id FROM translation_versions
+            WHERE order_id = :order_id AND id != :vid
+            ORDER BY version DESC LIMIT 1
+        """), {"order_id": order_id, "vid": version_id})
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="No other version to diff against")
+        against = row.id
+    try:
+        return await svc_diff_versions(db, order_id, str(version_id), str(against))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/orders/{order_id}/versions/live/diff")
+async def admin_diff_live(
+    order_id: str,
+    against: UUID,
+    admin: dict          = Depends(get_admin_user),
+    db:   AsyncSession   = Depends(get_db),
+):
+    """Diff current translations.json against a stored version."""
+    from core.storage import read_temp_json
+    live = read_temp_json(order_id, "translations.json")
+    if not live:
+        raise HTTPException(status_code=404, detail="No current translations.json found")
+
+    result = await db.execute(text("""
+        SELECT gcs_path FROM translation_versions
+        WHERE id = :vid AND order_id = :order_id
+    """), {"vid": str(against), "order_id": order_id})
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    from services.translation_versions import gcs_download_content
+    stored = json.loads(gcs_download_content(row.gcs_path))
+
+    def _build_diff(segs_a: list, segs_b: list) -> dict:
+        map_a = {s["index"]: s for s in segs_a}
+        map_b = {s["index"]: s for s in segs_b}
+        changed, added, removed = [], [], []
+        for idx in sorted(set(map_a) | set(map_b)):
+            a, b = map_a.get(idx), map_b.get(idx)
+            if a is None and b:
+                added.append({"index": idx, "source": b.get("source", ""), "text": b["translated"]})
+            elif a and b is None:
+                removed.append({"index": idx, "source": a.get("source", ""), "text": a["translated"]})
+            elif a and b and a.get("translated") != b.get("translated"):
+                changed.append({
+                    "index": idx, "source": a.get("source", ""),
+                    "old": a.get("translated", ""), "new": b.get("translated", ""),
+                })
+        return {"changed": changed, "added": added, "removed": removed}
+
+    return _build_diff(json.loads(gcs_download_content(row.gcs_path)) if isinstance(live, str) else live, live)
+
+
 # ── Admin: 標記訂單已交付 ────────────────────────────────────────────────────
 @router.post("/orders/{order_id}/deliver", response_model=MessageResponse)
 async def mark_delivered(
@@ -1426,6 +1546,8 @@ async def retrigger_pipeline(
     row = result.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Order not found")
+
+    await svc_save_version(db, order_id, source="pre_retranslate", created_by=str(admin["uid"]))
 
     await db.execute(text("""
         DELETE FROM qa_flags

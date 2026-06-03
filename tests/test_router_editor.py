@@ -5,13 +5,23 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core.database import get_db
-from routers.auth import get_editor_user, get_current_user, get_qa_user, get_reviewer_user
+from routers.auth import get_editor_user, get_current_user, get_lt_user, get_qa_user, get_reviewer_user
 from routers.editor import router
 
 MOCK_EDITOR_USER = {
     "uid": "editor-uid",
     "email": "editor@ots.tw",
     "user_id": "editor-db-id",
+    "client_type": "b2c",
+    "is_editor": True,
+    "is_qa": False,
+    "is_admin": False,
+}
+
+MOCK_LT_USER = {
+    "uid": "lt-user-uid",
+    "email": "lt-user@ots.tw",
+    "user_id": "lt-db-id",
     "client_type": "b2c",
     "is_editor": True,
     "is_qa": False,
@@ -461,3 +471,202 @@ class TestEditorListOrdersStatusFiltering:
         sql = str(calls[0][0][0]) if calls else ""
         assert "qa_review" in sql
         assert "editor_verify" in sql
+
+
+def _make_lt_app(mock_db):
+    """Helper to create a TestClient with LT user overrides."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from core.database import get_db
+    from routers.auth import get_lt_user
+    from routers.editor import router
+
+    app = FastAPI()
+    app.include_router(router)
+
+    async def override_db():
+        yield mock_db
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_lt_user] = lambda: MOCK_LT_USER
+    return TestClient(app)
+
+
+class TestLtCompleteAssignment:
+    """Tests for POST /editor/lt/orders/{order_id}/complete with version auto-save hooks."""
+
+    @patch("core.storage.read_temp_json")
+    def test_editor_complete_success(self, mock_read, mock_db):
+        assignment = MagicMock()
+        assignment.status = "editing"
+        mock_db.execute.return_value.fetchone.return_value = assignment
+        mock_read.return_value = [{"index": 0, "translated": "Hello", "editor_comments": "checked"}]
+
+        with patch("routers.editor.svc_save_version", new_callable=AsyncMock) as mock_save:
+            client = _make_lt_app(mock_db)
+            resp = client.post("/editor/lt/orders/order-001/complete?role=editor")
+
+        assert resp.status_code == 200
+        assert "Assignment completed" in resp.json()["message"]
+        mock_save.assert_awaited_once_with(mock_db, "order-001", source="editor", created_by="lt-db-id")
+
+    @patch("core.storage.read_temp_json")
+    def test_editor_revision_needed(self, mock_read, mock_db):
+        assignment = MagicMock()
+        assignment.status = "revision_needed"
+        mock_db.execute.return_value.fetchone.return_value = assignment
+
+        with patch("routers.editor.svc_save_version", new_callable=AsyncMock) as mock_save:
+            client = _make_lt_app(mock_db)
+            resp = client.post("/editor/lt/orders/order-001/complete?role=editor")
+
+        assert resp.status_code == 200
+        assert "proofreader" in resp.json()["message"].lower()
+        mock_save.assert_not_called()
+
+    def test_editor_already_done(self, mock_db):
+        assignment = MagicMock()
+        assignment.status = "editor_done"
+        mock_db.execute.return_value.fetchone.return_value = assignment
+
+        with patch("routers.editor.svc_save_version", new_callable=AsyncMock) as mock_save:
+            client = _make_lt_app(mock_db)
+            resp = client.post("/editor/lt/orders/order-001/complete?role=editor")
+
+        assert resp.status_code == 200
+        assert "already completed" in resp.json()["message"].lower()
+        mock_save.assert_not_called()
+
+    def test_editor_access_denied(self, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+        client = _make_lt_app(mock_db)
+        resp = client.post("/editor/lt/orders/order-001/complete?role=editor")
+        assert resp.status_code == 403
+
+    @patch("core.storage.read_temp_json")
+    def test_editor_no_translations(self, mock_read, mock_db):
+        assignment = MagicMock()
+        assignment.status = "editing"
+        mock_db.execute.return_value.fetchone.return_value = assignment
+        mock_read.return_value = None
+
+        client = _make_lt_app(mock_db)
+        resp = client.post("/editor/lt/orders/order-001/complete?role=editor")
+        assert resp.status_code == 404
+
+    @patch("core.storage.read_temp_json")
+    def test_editor_unresolved_qa_flags(self, mock_read, mock_db):
+        assignment = MagicMock()
+        assignment.status = "editing"
+        mock_db.execute.return_value.fetchone.return_value = assignment
+        mock_read.return_value = [{"index": 0, "translated": "Hello", "editor_comments": ""}]
+
+        must_fix = MagicMock()
+        must_fix.paragraph_index = 0
+        must_fix.id = "flag-001"
+        qa_res = MagicMock()
+        qa_res.fetchall.return_value = [must_fix]
+        mock_db.execute.return_value.fetchall.return_value = [must_fix]
+
+        client = _make_lt_app(mock_db)
+        resp = client.post("/editor/lt/orders/order-001/complete?role=editor")
+        assert resp.status_code == 400
+        assert "QA flags" in resp.json()["detail"]
+
+    @patch("core.storage.read_temp_json")
+    def test_proofreader_complete_success(self, mock_read, mock_db):
+        assignment = MagicMock()
+        assignment.status = "proofreading"
+        mock_db.execute.return_value.fetchone.return_value = assignment
+
+        with patch("routers.editor.svc_save_version", new_callable=AsyncMock) as mock_save:
+            client = _make_lt_app(mock_db)
+            resp = client.post("/editor/lt/orders/order-001/complete?role=proofreader")
+
+        assert resp.status_code == 200
+        assert "Assignment completed" in resp.json()["message"]
+        mock_save.assert_awaited_once_with(mock_db, "order-001", source="proofreader", created_by="lt-db-id")
+
+    def test_proofreader_wrong_status(self, mock_db):
+        assignment = MagicMock()
+        assignment.status = "editing"
+        mock_db.execute.return_value.fetchone.return_value = assignment
+
+        client = _make_lt_app(mock_db)
+        resp = client.post("/editor/lt/orders/order-001/complete?role=proofreader")
+        assert resp.status_code == 400
+        assert "proofreading" in resp.json()["detail"]
+
+
+class TestLtVersions:
+    """Tests for LT read-only version history endpoints."""
+
+    def test_list_versions_success(self, mock_db):
+        row = MagicMock()
+        row.id = "ver-001"
+        row.order_id = "order-001"
+        row.version = 1
+        row.label = None
+        row.source = "nmt"
+        row.created_by = None
+        row.created_at = datetime.now(timezone.utc)
+        row.segment_count = 10
+        mock_db.execute.return_value.fetchall.return_value = [row]
+
+        client = _make_lt_app(mock_db)
+        resp = client.get("/editor/lt/orders/order-001/versions")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+
+    def test_list_versions_empty(self, mock_db):
+        mock_db.execute.return_value.fetchall.return_value = []
+        client = _make_lt_app(mock_db)
+        resp = client.get("/editor/lt/orders/order-001/versions")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_diff_versions_success(self, mock_db):
+        diff_result = {"changed": [], "added": [], "removed": []}
+        with patch("routers.editor.svc_diff_versions", new_callable=AsyncMock) as mock_diff:
+            mock_diff.return_value = diff_result
+            client = _make_lt_app(mock_db)
+            resp = client.get(
+                "/editor/lt/orders/order-001/versions/11111111-1111-1111-1111-111111111001/diff",
+                params={"against": "11111111-1111-1111-1111-111111111002"},
+            )
+        assert resp.status_code == 200
+        assert "changed" in resp.json()
+
+    def test_diff_versions_auto_latest(self, mock_db):
+        row = MagicMock()
+        row.id = "11111111-1111-1111-1111-111111111002"
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        diff_result = {"changed": [], "added": [], "removed": []}
+        with patch("routers.editor.svc_diff_versions", new_callable=AsyncMock) as mock_diff:
+            mock_diff.return_value = diff_result
+            client = _make_lt_app(mock_db)
+            resp = client.get(
+                "/editor/lt/orders/order-001/versions/11111111-1111-1111-1111-111111111001/diff",
+            )
+        assert resp.status_code == 200
+
+    def test_diff_versions_no_other_version(self, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+        client = _make_lt_app(mock_db)
+        resp = client.get(
+            "/editor/lt/orders/order-001/versions/11111111-1111-1111-1111-111111111001/diff",
+        )
+        assert resp.status_code == 404
+        assert "No other version" in resp.json()["detail"]
+
+    @patch("core.storage.read_temp_json")
+    def test_diff_live_not_found(self, mock_read, mock_db):
+        mock_read.return_value = None
+        client = _make_lt_app(mock_db)
+        resp = client.get(
+            "/editor/lt/orders/order-001/versions/live/diff",
+            params={"against": "11111111-1111-1111-1111-111111111001"},
+        )
+        assert resp.status_code == 404

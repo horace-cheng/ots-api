@@ -1226,7 +1226,9 @@ class TestAdminRetranslate:
 
         with patch("routers.admin.trigger_pipeline", new_callable=AsyncMock) as mock_trigger:
             mock_trigger.return_value = "msg-123"
-            resp = admin_client.post("/admin/orders/order-001/retranslate")
+            with patch("routers.admin.svc_save_version", new_callable=AsyncMock) as mock_save:
+                mock_save.return_value = None
+                resp = admin_client.post("/admin/orders/order-001/retranslate")
 
         assert resp.status_code == 200
         assert "re-triggered" in resp.json()["message"]
@@ -1455,3 +1457,207 @@ class TestAdminTokenUsageDetail:
 
         assert resp.status_code == 404
         assert "No token usage data" in resp.json()["detail"]
+
+
+class TestTranslationVersions:
+    def _version_row(self, v=1, source="nmt", label=None):
+        from datetime import datetime, timezone
+        row = MagicMock()
+        row.id = f"ver-{v:03d}"
+        row.version = v
+        row.label = label
+        row.source = source
+        row.created_at = datetime.now(timezone.utc)
+        row.segment_count = 10
+        row.gcs_path = f"pipeline/order-001/versions/v{v}.json"
+        row.created_by_email = "admin@ots.tw"
+        row._mapping = {
+            "id": row.id,
+            "version": row.version,
+            "label": row.label,
+            "source": row.source,
+            "created_at": row.created_at,
+            "segment_count": row.segment_count,
+            "gcs_path": row.gcs_path,
+            "created_by_email": row.created_by_email,
+        }
+        return row
+
+    def _next_ver_row(self, next_ver=1):
+        row = MagicMock()
+        row.next_ver = next_ver
+        return row
+
+    def _insert_return_row(self, v=1, source="manual"):
+        from datetime import datetime, timezone
+        row = MagicMock()
+        row.id = f"ver-{v:03d}"
+        row.version = v
+        row.label = None
+        row.created_by = "admin-db-id-001"
+        row.created_at = datetime.now(timezone.utc)
+        row.gcs_path = f"pipeline/order-001/versions/v{v}.json"
+        row.segment_count = 10
+        row.source = source
+        row._mapping = {
+            "id": row.id,
+            "version": row.version,
+            "label": row.label,
+            "created_by": row.created_by,
+            "created_at": row.created_at,
+            "gcs_path": row.gcs_path,
+            "segment_count": row.segment_count,
+            "source": row.source,
+        }
+        return row
+
+    def _make_handler(self, results_by_keyword):
+        def handler(*args, **kwargs):
+            sql = str(args[0]).lower() if args else ''
+            for keyword, result in results_by_keyword.items():
+                if keyword in sql:
+                    return result
+            r = MagicMock()
+            r.fetchone.return_value = None
+            r.fetchall.return_value = []
+            return r
+        return handler
+
+    # ── List Versions ──────────────────────────────────────────────────────
+    def test_list_versions_empty(self, admin_client, mock_db):
+        list_res = MagicMock()
+        list_res.fetchall.return_value = []
+        mock_db.execute.return_value = list_res
+
+        resp = admin_client.get("/admin/orders/order-001/versions")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_list_versions_success(self, admin_client, mock_db):
+        v1 = self._version_row(1)
+        v2 = self._version_row(2)
+        list_res = MagicMock()
+        list_res.fetchall.return_value = [v2, v1]
+        mock_db.execute.return_value = list_res
+
+        resp = admin_client.get("/admin/orders/order-001/versions")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 2
+        assert data[0]["version"] == 2
+        assert data[1]["version"] == 1
+
+    # ── Save Version ───────────────────────────────────────────────────────
+    def test_save_version_no_translations_returns_404(self, admin_client, mock_db):
+        with patch("routers.admin.svc_save_version", new_callable=AsyncMock) as mock_save:
+            mock_save.return_value = None
+            resp = admin_client.post("/admin/orders/order-001/versions")
+        assert resp.status_code == 404
+        assert "No translations.json found" in resp.json()["detail"]
+
+    def test_save_version_success(self, admin_client, mock_db):
+        version = {"id": "ver-001", "version": 1, "source": "manual"}
+        with patch("routers.admin.svc_save_version", new_callable=AsyncMock) as mock_save:
+            mock_save.return_value = version
+            resp = admin_client.post("/admin/orders/order-001/versions")
+        assert resp.status_code == 200
+        assert resp.json()["version"] == 1
+
+    def test_save_version_with_label(self, admin_client, mock_db):
+        version = {"id": "ver-001", "version": 1, "label": "before edit", "source": "manual"}
+        with patch("routers.admin.svc_save_version", new_callable=AsyncMock) as mock_save:
+            mock_save.return_value = version
+            resp = admin_client.post("/admin/orders/order-001/versions?label=before+edit")
+        assert resp.status_code == 200
+        assert resp.json()["label"] == "before edit"
+
+    # ── Restore Version ────────────────────────────────────────────────────
+    def test_restore_version_not_found_returns_404(self, admin_client, mock_db):
+        with patch("routers.admin.svc_restore_version", new_callable=AsyncMock) as mock_restore:
+            mock_restore.return_value = None
+            resp = admin_client.post("/admin/orders/order-001/versions/ver-999/restore")
+        assert resp.status_code == 404
+
+    def test_restore_version_success(self, admin_client, mock_db):
+        version = {"id": "ver-002", "version": 2, "source": "restored"}
+        with patch("routers.admin.svc_restore_version", new_callable=AsyncMock) as mock_restore:
+            mock_restore.return_value = version
+            resp = admin_client.post("/admin/orders/order-001/versions/ver-001/restore")
+        assert resp.status_code == 200
+        assert resp.json()["source"] == "restored"
+        assert resp.json()["version"] == 2
+
+    # ── Diff Versions ──────────────────────────────────────────────────────
+    def test_diff_versions_success(self, admin_client, mock_db):
+        diff_result = {"changed": [], "added": [], "removed": []}
+        with patch("routers.admin.svc_diff_versions", new_callable=AsyncMock) as mock_diff:
+            mock_diff.return_value = diff_result
+            resp = admin_client.get(
+                "/admin/orders/order-001/versions/11111111-1111-1111-1111-111111111001/diff",
+                params={"against": "11111111-1111-1111-1111-111111111002"},
+            )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "changed" in data
+
+    def test_diff_versions_auto_latest(self, admin_client, mock_db):
+        """When against is omitted, it should use the latest version."""
+        latest = MagicMock()
+        latest.id = "11111111-1111-1111-1111-111111111002"
+        latest_res = MagicMock()
+        latest_res.fetchone.return_value = latest
+
+        diff_result = {"changed": [], "added": [], "removed": []}
+        mock_db.execute.return_value = latest_res
+
+        with patch("routers.admin.svc_diff_versions", new_callable=AsyncMock) as mock_diff:
+            mock_diff.return_value = diff_result
+            resp = admin_client.get(
+                "/admin/orders/order-001/versions/11111111-1111-1111-1111-111111111001/diff",
+            )
+        assert resp.status_code == 200
+
+    def test_diff_versions_no_other_version_returns_404(self, admin_client, mock_db):
+        none_res = MagicMock()
+        none_res.fetchone.return_value = None
+        mock_db.execute.return_value = none_res
+
+        resp = admin_client.get(
+            "/admin/orders/order-001/versions/11111111-1111-1111-1111-111111111001/diff",
+        )
+        assert resp.status_code == 404
+        assert "No other version" in resp.json()["detail"]
+
+    def test_diff_versions_not_found_returns_404(self, admin_client, mock_db):
+        diff_res = MagicMock()
+        diff_res.fetchall.return_value = []
+        mock_db.execute.return_value = diff_res
+
+        with patch("routers.admin.svc_diff_versions") as mock_diff:
+            mock_diff.side_effect = ValueError("One or both versions not found")
+            resp = admin_client.get(
+                "/admin/orders/order-001/versions/11111111-1111-1111-1111-111111111999/diff",
+                params={"against": "11111111-1111-1111-1111-111111111001"},
+            )
+        assert resp.status_code == 404
+
+    def test_diff_live_not_found_returns_404(self, admin_client, mock_db):
+        with patch("core.storage.read_temp_json") as mock_read:
+            mock_read.return_value = None
+            resp = admin_client.get(
+                "/admin/orders/order-001/versions/live/diff",
+                params={"against": "11111111-1111-1111-1111-111111111001"},
+            )
+        assert resp.status_code == 404
+
+    def test_diff_live_version_not_found_returns_404(self, admin_client, mock_db):
+        with patch("core.storage.read_temp_json") as mock_read:
+            mock_read.return_value = [{"index": 0, "translated": "Hello"}]
+            none_res = MagicMock()
+            none_res.fetchone.return_value = None
+            mock_db.execute.return_value = none_res
+            resp = admin_client.get(
+                "/admin/orders/order-001/versions/live/diff",
+                params={"against": "11111111-1111-1111-1111-111111111999"},
+            )
+        assert resp.status_code == 404
