@@ -1547,8 +1547,9 @@ async def retrigger_pipeline(
     db:   AsyncSession = Depends(get_db),
 ):
     """
-    重新觸發翻譯 Pipeline。
-    用於訂單翻譯失敗、QA 不通過需重新翻譯等情況。
+    重新觸發翻譯 Pipeline（管理員專用）。
+    可在任何訂單狀態下執行，包括編輯進行中。
+    將清除既有翻譯、QA 標記、段落編輯與 Pipeline Job 紀錄。
     """
     result = await db.execute(text("SELECT id, status FROM orders WHERE id = :id"), {"id": order_id})
     row = result.fetchone()
@@ -1557,10 +1558,19 @@ async def retrigger_pipeline(
 
     await svc_save_version(db, order_id, source="pre_retranslate", created_by=str(admin["uid"]))
 
+    # Clean all QA flags across all job types
     await db.execute(text("""
         DELETE FROM qa_flags
-        WHERE job_id IN (SELECT id FROM pipeline_jobs WHERE order_id = :id AND job_type = 'qa_auto')
+        WHERE job_id IN (SELECT id FROM pipeline_jobs WHERE order_id = :id)
     """), {"id": order_id})
+
+    # Reset literary assignments
+    await db.execute(text("""
+        UPDATE assignments SET status = 'pending' WHERE order_id = :id
+    """), {"id": order_id})
+
+    # Reset pipeline jobs so checkpoints aren't reused
+    await db.execute(text("DELETE FROM pipeline_jobs WHERE order_id = :id"), {"id": order_id})
 
     await db.execute(text("""
         UPDATE orders SET status = 'processing', delivered_at = NULL WHERE id = :id
@@ -1569,8 +1579,13 @@ async def retrigger_pipeline(
 
     await trigger_pipeline(order_id)
 
-    logger.info(f"Pipeline re-triggered by admin: order={order_id}")
-    return MessageResponse(message=f"Pipeline re-triggered for order {order_id}")
+    logger.info(f"Pipeline re-triggered by admin: order={order_id} (prior status: {row.status})")
+    return MessageResponse(
+        message=(
+            f"⚠️ Pipeline 已重新觸發。訂單 {order_id} 的所有翻譯、"
+            f"QA 標記、段落編輯紀錄及 Pipeline Job 資料均已清除。"
+        )
+    )
 
 
 @router.post("/orders/{order_id}/redeliver", response_model=MessageResponse)

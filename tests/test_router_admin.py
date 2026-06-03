@@ -1231,7 +1231,7 @@ class TestAdminRetranslate:
                 resp = admin_client.post("/admin/orders/order-001/retranslate")
 
         assert resp.status_code == 200
-        assert "re-triggered" in resp.json()["message"]
+        assert "已重新觸發" in resp.json()["message"]
         mock_db.commit.assert_awaited()
         mock_trigger.assert_awaited_once_with("order-001")
 
