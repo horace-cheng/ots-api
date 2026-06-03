@@ -64,7 +64,7 @@ Reference material:
 
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
             contents=prompt,
         )
         text = response.text.strip() if response.text else ""
@@ -128,7 +128,7 @@ Reference material:
     try:
         import google.genai as genai
         client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        response = client.models.generate_content(model="gemini-3.5-flash", contents=prompt)
         raw = response.text.strip() if response.text else ""
         raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         data = json.loads(raw) if raw else {}
@@ -179,7 +179,7 @@ Reference material:
     try:
         import google.genai as genai
         client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        response = client.models.generate_content(model="gemini-3.5-flash", contents=prompt)
         text = response.text.strip() if response.text else ""
         if text:
             logger.info(f"Market analysis generated: {len(text)} chars")

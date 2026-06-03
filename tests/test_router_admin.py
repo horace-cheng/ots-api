@@ -1316,7 +1316,7 @@ class TestAdminTokenUsage:
     def test_returns_aggregated_data(self, admin_client, mock_db):
         mock_db.execute.return_value.fetchall.return_value = [
             self._make_fetchall_row("nmt", "gemini-2.5-pro", 12000, 6000, 0.075, input_rate=1.25, output_rate=10.0),
-            self._make_fetchall_row("qa_auto", "gemini-2.5-flash", 340, 780, 0.00069, input_rate=0.30, output_rate=2.50),
+            self._make_fetchall_row("qa_auto", "gemini-3.5-flash", 340, 780, 0.00114, input_rate=0.50, output_rate=3.00),
         ]
 
         resp = admin_client.get("/admin/orders/order-001/token-usage")
@@ -1327,7 +1327,7 @@ class TestAdminTokenUsage:
         assert data["total_prompt"] == 12340
         assert data["total_candidates"] == 6780
         assert data["total_tokens"] == 19120
-        assert data["total_cost_usd"] == pytest.approx(0.07569, rel=1e-4)
+        assert data["total_cost_usd"] == pytest.approx(0.07614, rel=1e-4)
         assert len(data["breakdown"]) == 2
 
         nmt = [b for b in data["breakdown"] if b["job_type"] == "nmt"][0]
@@ -1340,8 +1340,8 @@ class TestAdminTokenUsage:
         assert nmt["cost_usd"] == pytest.approx(0.075, rel=1e-4)
 
         qa = [b for b in data["breakdown"] if b["job_type"] == "qa_auto"][0]
-        assert qa["input_rate"] == 0.30
-        assert qa["output_rate"] == 2.50
+        assert qa["input_rate"] == 0.50
+        assert qa["output_rate"] == 3.00
 
     def test_no_data_returns_404(self, admin_client, mock_db):
         mock_db.execute.return_value.fetchall.return_value = []
@@ -1400,7 +1400,7 @@ class TestAdminTokenUsageDetail:
         rows = [
             self._make_row("nmt", "gemini-2.5-pro", 100, 50, 0.001, 1.25, 10.0),
             self._make_row("nmt", "gemini-2.5-pro", 200, 80, 0.002, 1.25, 10.0),
-            self._make_row("qa_auto", "gemini-2.5-flash", 30, 60, 0.0001, 0.30, 2.50),
+            self._make_row("qa_auto", "gemini-3.5-flash", 30, 60, 0.000165, 0.50, 3.00),
         ]
         handler, total = self._make_handler(rows)
         mock_db.execute.side_effect = handler
