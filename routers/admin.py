@@ -836,12 +836,20 @@ async def admin_get_pipeline_progress(
         except Exception:
             pass
 
-    # Determine overall status
-    if total_batches == 0:
-        status = "no_batches"
-    elif completed_batches >= total_batches:
-        status = "complete"
-    else:
+    # If translations.json exists, the pipeline completed its final write
+    # regardless of whether individual batch checkpoints exist (e.g. after
+    # retry exhaustion — those segments are flagged as must_fix).
+    try:
+        out_blob = bucket.blob(f"pipeline/{order_id}/translations.json")
+        if out_blob.exists():
+            status = "complete"
+        elif total_batches == 0:
+            status = "no_batches"
+        elif completed_batches >= total_batches:
+            status = "complete"
+        else:
+            status = "in_progress"
+    except Exception:
         status = "in_progress"
 
     return {
