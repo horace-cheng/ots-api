@@ -945,7 +945,7 @@ async def admin_get_token_usage_detail(
                 input_rate, output_rate, cost_usd, created_at
             FROM token_usage
             WHERE order_id = :order_id
-            ORDER BY created_at
+            ORDER BY created_at DESC
             LIMIT :limit OFFSET :offset
         """), {"order_id": order_id, "limit": limit, "offset": offset})
     except ProgrammingError:
