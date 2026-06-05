@@ -83,40 +83,52 @@ async def import_gutenberg_book(
     Admin triggers a Gutenberg book translation.
     Creates a 'gutenberg' track order and triggers the pipeline.
     """
-    # Use a dummy user_id or a system user for Gutenberg orders
-    # For now, we'll use the admin's user_id to associate the order
-    user_id = admin.get("uid")
-    
-    # Create order
-    await db.execute(text("""
-        INSERT INTO orders (user_id, track_type, status, price_ntd, target_lang, title)
-        VALUES (:user_id, 'gutenberg', 'processing', 0, 'zh-tw', :title)
-    """), {"user_id": user_id, "title": f"Gutenberg Book {book_id}"})
-    
-    await db.commit()
-    
-    # Get the created order_id
-    result = await db.execute(
-        text("SELECT id FROM orders WHERE title = :title ORDER BY created_at DESC LIMIT 1"),
-        {"title": f"Gutenberg Book {book_id}"}
-    )
+    # Fetch book metadata first to get the real word count
+    try:
+        book_info = await gutenberg_svc.preview_book(book_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch Gutenberg book {book_id}: {e}")
+
+    # Schema requires word_count > 0 and price_ntd > 0; Gutenberg orders
+    # are admin-initiated (no payment) so we use the real word_count and
+    # a placeholder price of 1. The user_id comes from the admin's row in
+    # the users table (auto-created by get_current_user on first login).
+    word_count = max(1, int(book_info.get("word_count") or 1))
+
+    # Create order — user_id is looked up via subquery from the admin's
+    # uid_firebase. All NOT NULL columns and CHECK constraints satisfied.
+    result = await db.execute(text("""
+        INSERT INTO orders (
+            user_id, track_type, status, source_lang, target_lang,
+            word_count, price_ntd, title
+        )
+        SELECT u.id, 'gutenberg', 'processing', 'en', 'zh-tw',
+               :word_count, 1, :title
+        FROM users u WHERE u.uid_firebase = :uid
+        RETURNING id
+    """), {
+        "uid":        admin["uid"],
+        "word_count": word_count,
+        "title":      f"Gutenberg Book {book_id}",
+    })
+
     order_row = result.fetchone()
     if not order_row:
-        raise HTTPException(status_code=500, detail="Failed to create Gutenberg order")
-    
+        raise HTTPException(
+            status_code=500,
+            detail="Admin user has no matching users row; cannot create order",
+        )
     order_id = str(order_row[0])
-    
-    # Trigger Pipeline via Pub/Sub
-    # We pass the book_id in the metadata if trigger_pipeline supports it, 
-    # or we can store it in the 'notes' field of the order.
+
+    # Store the gutenberg_book_id in notes (consumed by gt_fetcher)
     await db.execute(
         text("UPDATE orders SET notes = :notes WHERE id = :id"),
         {"notes": json.dumps({"gutenberg_book_id": book_id}), "id": order_id}
     )
     await db.commit()
-    
+
     await trigger_pipeline(order_id)
-    
+
     return MessageResponse(message=f"Gutenberg book {book_id} import triggered. Order ID: {order_id}")
 
 
