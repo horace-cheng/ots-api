@@ -59,3 +59,28 @@ def ecpay_settings(monkeypatch):
     monkeypatch.setattr(settings, "ecpay_hash_key", "5294y06JbISpM5x9")
     monkeypatch.setattr(settings, "ecpay_hash_iv", "v77hoKGq4kWxNNIS")
     monkeypatch.setattr(settings, "ecpay_sandbox", True)
+
+
+@pytest.fixture
+def admin_client(mock_db):
+    """TestClient wired to the admin router with mocked DB and admin auth.
+
+    Overrides get_db -> mock_db and get_admin_user -> MOCK_ADMIN_USER so admin
+    endpoint tests can run without touching the real database or Firebase.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from core.database import get_db
+    from routers.auth import get_admin_user
+    from routers.admin import router
+
+    app = FastAPI()
+    app.include_router(router)
+
+    async def override_db():
+        yield mock_db
+
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_admin_user] = lambda: MOCK_ADMIN_USER
+
+    return TestClient(app)
