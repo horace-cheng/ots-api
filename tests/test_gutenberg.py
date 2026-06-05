@@ -145,35 +145,8 @@ class TestGutenbergService:
         assert chunks == []
 
     @pytest.mark.asyncio
-    async def test_fetch_metadata_follows_redirects(self, monkeypatch):
-        """gutendex.com 301-redirects /books/N -> /books/N/; client must follow."""
-        from services import gutenberg
-
-        captured_kwargs: dict = {}
-
-        class _FakeAsyncClient:
-            def __init__(self, *args, **kwargs):
-                captured_kwargs.update(kwargs)
-            async def __aenter__(self):
-                return self
-            async def __aexit__(self, *args):
-                return False
-            async def get(self, url):
-                resp = MagicMock()
-                resp.status_code = 200
-                resp.json.return_value = {
-                    "id": 139, "title": "Test", "authors": [], "languages": ["en"],
-                }
-                return resp
-
-        monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
-        result = await gutenberg.fetch_metadata(139)
-        assert captured_kwargs.get("follow_redirects") is True
-        assert result["book_id"] == 139
-        assert result["title"] == "Test"
-
-    @pytest.mark.asyncio
     async def test_fetch_text_follows_redirects(self, monkeypatch):
+        """Client must be configured with follow_redirects=True."""
         from services import gutenberg
 
         captured_kwargs: dict = {}
@@ -188,12 +161,7 @@ class TestGutenbergService:
             async def get(self, url):
                 resp = MagicMock()
                 resp.status_code = 200
-                if "books/139" in url:
-                    resp.json.return_value = {
-                        "formats": {"text/plain; charset=us-ascii": "http://example.com/book.txt"}
-                    }
-                else:
-                    resp.text = "body"
+                resp.text = "body"
                 return resp
 
         monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
@@ -201,7 +169,51 @@ class TestGutenbergService:
         assert captured_kwargs.get("follow_redirects") is True
 
     @pytest.mark.asyncio
-    async def test_fetch_metadata_404_raises_value_error(self, monkeypatch):
+    async def test_fetch_text_first_pattern_succeeds(self, monkeypatch):
+        from services import gutenberg
+
+        class _FakeAsyncClient:
+            def __init__(self, *args, **kwargs): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+            async def get(self, url):
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.text = "first"
+                return resp
+
+        monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
+        result = await gutenberg.fetch_text(1342)
+        assert result == "first"
+
+    @pytest.mark.asyncio
+    async def test_fetch_text_falls_back_to_next_pattern(self, monkeypatch):
+        from services import gutenberg
+
+        urls_called: list = []
+
+        class _FakeAsyncClient:
+            def __init__(self, *args, **kwargs): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+            async def get(self, url):
+                urls_called.append(url)
+                resp = MagicMock()
+                if len(urls_called) == 1:
+                    resp.status_code = 404
+                else:
+                    resp.status_code = 200
+                    resp.text = "second"
+                return resp
+
+        monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
+        result = await gutenberg.fetch_text(1342)
+        assert result == "second"
+        assert len(urls_called) == 2
+        assert urls_called[0] != urls_called[1]
+
+    @pytest.mark.asyncio
+    async def test_fetch_text_all_404_raises_value_error(self, monkeypatch):
         from services import gutenberg
 
         class _FakeAsyncClient:
@@ -214,23 +226,41 @@ class TestGutenbergService:
                 return resp
 
         monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
-        with pytest.raises(ValueError, match="9999"):
-            await gutenberg.fetch_metadata(9999)
+        with pytest.raises(ValueError, match="No text file found"):
+            await gutenberg.fetch_text(9999)
 
-    @pytest.mark.asyncio
-    async def test_fetch_text_no_plain_format_raises_value_error(self, monkeypatch):
-        from services import gutenberg
+    def test_parse_header_metadata_extracts_title_author_language(self):
+        from services.gutenberg import parse_header_metadata
+        text = (
+            "Title: Pride and Prejudice\n"
+            "Author: Jane Austen\n"
+            "Language: English\n"
+            "*** START OF THE PROJECT GUTENBERG EBOOK PRIDE AND PREJUDICE ***\n"
+            "CHAPTER I.\n"
+        )
+        meta = parse_header_metadata(text, fallback_book_id=1342)
+        assert meta["title"] == "Pride and Prejudice"
+        assert meta["authors"] == ["Jane Austen"]
+        assert meta["language"] == "en"
 
-        class _FakeAsyncClient:
-            def __init__(self, *args, **kwargs): pass
-            async def __aenter__(self): return self
-            async def __aexit__(self, *args): return False
-            async def get(self, url):
-                resp = MagicMock()
-                resp.status_code = 200
-                resp.json.return_value = {"formats": {}}
-                return resp
+    def test_parse_header_metadata_multiple_authors(self):
+        from services.gutenberg import parse_header_metadata
+        text = "Title: Test\nAuthor: A. Author, B. Author\nLanguage: French\n"
+        meta = parse_header_metadata(text, fallback_book_id=1)
+        assert meta["authors"] == ["A. Author", "B. Author"]
+        assert meta["language"] == "fr"
 
-        monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
-        with pytest.raises(ValueError, match="No plain text format"):
-            await gutenberg.fetch_text(139)
+    def test_parse_header_metadata_author_with_translator(self):
+        """Parenthesized roles should not be split as new authors."""
+        from services.gutenberg import parse_header_metadata
+        text = "Title: Les Misérables\nAuthor: Victor Hugo, Isabel F. Hapgood (Translator)\nLanguage: French\n"
+        meta = parse_header_metadata(text, fallback_book_id=1)
+        assert meta["authors"] == ["Victor Hugo", "Isabel F. Hapgood (Translator)"]
+
+    def test_parse_header_metadata_missing_uses_fallback(self):
+        from services.gutenberg import parse_header_metadata
+        text = "Just some body, no header."
+        meta = parse_header_metadata(text, fallback_book_id=42)
+        assert meta["title"] == "Gutenberg Book 42"
+        assert meta["authors"] == []
+        assert meta["language"] == "en"
