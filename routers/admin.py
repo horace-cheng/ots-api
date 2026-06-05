@@ -51,6 +51,54 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
+# ── Gutenberg Import ──────────────────────────────────────────────────────
+@router.post("/gutenberg/{book_id}", response_model=MessageResponse)
+async def import_gutenberg_book(
+    book_id: int,
+    admin: dict              = Depends(get_admin_user),
+    db:   AsyncSession      = Depends(get_db),
+):
+    """
+    Admin triggers a Gutenberg book translation.
+    Creates a 'gutenberg' track order and triggers the pipeline.
+    """
+    # Use a dummy user_id or a system user for Gutenberg orders
+    # For now, we'll use the admin's user_id to associate the order
+    user_id = admin.get("uid")
+    
+    # Create order
+    await db.execute(text("""
+        INSERT INTO orders (user_id, track_type, status, price_ntd, target_lang, title)
+        VALUES (:user_id, 'gutenberg', 'pending', 0, 'zh-Hant', :title)
+    """), {"user_id": user_id, "title": f"Gutenberg Book {book_id}"})
+    
+    await db.commit()
+    
+    # Get the created order_id
+    result = await db.execute(
+        text("SELECT id FROM orders WHERE title = :title ORDER BY created_at DESC LIMIT 1"),
+        {"title": f"Gutenberg Book {book_id}"}
+    )
+    order_row = result.fetchone()
+    if not order_row:
+        raise HTTPException(status_code=500, detail="Failed to create Gutenberg order")
+    
+    order_id = str(order_row[0])
+    
+    # Trigger Pipeline via Pub/Sub
+    # We pass the book_id in the metadata if trigger_pipeline supports it, 
+    # or we can store it in the 'notes' field of the order.
+    await db.execute(
+        text("UPDATE orders SET notes = :notes WHERE id = :id"),
+        {"notes": json.dumps({"gutenberg_book_id": book_id}), "id": order_id}
+    )
+    await db.commit()
+    
+    await trigger_pipeline(order_id)
+    
+    return MessageResponse(message=f"Gutenberg book {book_id} import triggered. Order ID: {order_id}")
+
+
 # ── QA Flags ──────────────────────────────────────────────────────────────────
 @router.get("/qa-flags", response_model=QAFlagListResponse)
 async def list_qa_flags(
