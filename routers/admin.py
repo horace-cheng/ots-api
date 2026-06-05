@@ -90,7 +90,7 @@ async def import_gutenberg_book(
     # Create order
     await db.execute(text("""
         INSERT INTO orders (user_id, track_type, status, price_ntd, target_lang, title)
-        VALUES (:user_id, 'gutenberg', 'pending', 0, 'zh-Hant', :title)
+        VALUES (:user_id, 'gutenberg', 'processing', 0, 'zh-Hant', :title)
     """), {"user_id": user_id, "title": f"Gutenberg Book {book_id}"})
     
     await db.commit()
