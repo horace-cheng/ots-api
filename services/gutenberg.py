@@ -1,40 +1,48 @@
 """
 services/gutenberg.py
 
-Project Gutenberg client that hits gutenberg.org directly (no third-party
-dependency on gutendex.com). Parses metadata (title, authors, language) from
-the standard PG text header, which is always present in the first ~2KB of
-every book file.
+Project Gutenberg client.
 
-URL patterns tried in order:
-  1. https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt    (modern UTF-8)
-  2. https://www.gutenberg.org/files/{id}/{id}-0.txt         (older multi-file)
-  3. https://www.gutenberg.org/files/{id}/{id}.txt           (simple)
+Primary path: EPUB (gutenberg.org/ebooks/{id}.epub.noimages).
+  - OPF metadata gives title/author/language directly (no header parsing)
+  - NCX navPoints give structured chapter list (no regex guessing)
+  - Each chapter XHTML becomes one chunk — clean boundaries
+
+Fallback: plain text (gutenberg.org/cache/epub/{id}/pg{id}.txt etc.)
+  - For books without EPUB, or corrupt NCX
+  - Parses PG standard text header for metadata
+  - Uses chapter regex on text body
 """
 import asyncio
+import io
 import logging
+import posixpath
 import re
-from typing import List
+import zipfile
+from html.parser import HTMLParser
+from typing import List, Optional
+from xml.etree import ElementTree as ET
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
+EPUB_URL_PATTERN  = "https://www.gutenberg.org/ebooks/{id}.epub.noimages"
 TEXT_URL_PATTERNS = [
     "https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt",
     "https://www.gutenberg.org/files/{id}/{id}-0.txt",
     "https://www.gutenberg.org/files/{id}/{id}.txt",
 ]
 
+# ── Plain-text chapter detection (fallback) ─────────────────────────────────
 CHAPTER_RE = re.compile(
     r'^[ \t]*CHAPTER[ \t]+[IVXLCDM\d]+[^\n]*$',
     re.IGNORECASE | re.MULTILINE,
 )
-META_RE = re.compile(r'^(Title|Author|Language)\s*:\s*(.+?)\s*$', re.MULTILINE)
+META_RE     = re.compile(r'^(Title|Author|Language)\s*:\s*(.+?)\s*$', re.MULTILINE)
 START_MARKER = re.compile(
     r'\*\*\*\s*START OF (THE|THIS) PROJECT GUTENBERG', re.IGNORECASE
 )
-
 LANG_NAME_TO_CODE = {
     "english":  "en", "french":  "fr", "german":   "de", "spanish":  "es",
     "italian":  "it", "portuguese": "pt", "chinese": "zh", "japanese": "ja",
@@ -42,11 +50,61 @@ LANG_NAME_TO_CODE = {
     "russian":  "ru", "greek":   "el",
 }
 
+# ── EPUB chapter classification ──────────────────────────────────────────────
+# Anchored match: must start the label. Catches "CHAPTER I", "Chapter 1",
+# "Letter 1", "CHAPTER I. Title", "I The Old Sea-dog" (bare Roman), etc.
+CHAPTER_ANCHORED_RE = re.compile(
+    r'^(?:(chapter|letter)\s+)?([IVXLCDM]+|\d+)(?=[\s\.\-:]|$)',
+    re.IGNORECASE,
+)
+# Anywhere match: for malformed NCX labels like "I hope... CHAPTER II."
+# where the previous chapter's content is concatenated with the new heading.
+CHAPTER_ANYWHERE_RE = re.compile(
+    r'\b(CHAPTER|Chapter|chapter|Letter|LETTER)\s+([IVXLCDM]+|\d+)\b'
+)
+PART_RE = re.compile(r'^part\s+[a-z0-9]+', re.IGNORECASE)
+FRONTMATTER_TERMS = (
+    "title page", "contents", "illustrations", "preface", "foreword",
+    "dedication", "colophon", "transcriber", "epigraph",
+    "advertisement", "errata", "imprint",
+)
+
+# XML namespaces
+NS_NCX = {"ncx": "http://www.daisy.org/z3986/2005/ncx/"}
+NS_OPF = {"opf": "http://www.idpf.org/2007/opf",
+          "dc":  "http://purl.org/dc/elements/1.1/"}
+NS_HTML = {"x": "http://www.w3.org/1999/xhtml"}
+
+
+# ── HTML stripping (for EPUB chapter XHTML) ────────────────────────────────
+
+class _TextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: List[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+
+def _strip_html(html: str) -> str:
+    """Strip HTML tags from a chapter XHTML, preserving text content."""
+    parser = _TextExtractor()
+    try:
+        parser.feed(html)
+    except Exception:
+        pass
+    text = "".join(parser.parts)
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\n\s*\n+', '\n\n', text)
+    return text.strip()
+
+
+# ── HTTP helpers ────────────────────────────────────────────────────────────
 
 async def _get_with_retry(
     client: httpx.AsyncClient, url: str, max_attempts: int = 3
 ) -> httpx.Response:
-    """GET with exponential backoff. Re-raises HTTPStatusError on 4xx/5xx."""
     delay = 0.5
     last_exc: Exception | None = None
     for attempt in range(max_attempts):
@@ -60,39 +118,14 @@ async def _get_with_retry(
     raise last_exc  # type: ignore[misc]
 
 
-async def fetch_text(book_id: int) -> str:
-    """Fetch plain-text body of a Gutenberg book, trying multiple URL patterns."""
-    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-        for pattern in TEXT_URL_PATTERNS:
-            url = pattern.format(id=book_id)
-            try:
-                resp = await _get_with_retry(client, url)
-                if resp.status_code == 200:
-                    logger.info(f"Fetched book {book_id} from {url}")
-                    return resp.text
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 404:
-                    continue
-                raise
-        raise ValueError(
-            f"No text file found for Gutenberg book {book_id} "
-            f"(tried {len(TEXT_URL_PATTERNS)} patterns)"
-        )
-
+# ── Plain-text metadata + chunking (fallback) ───────────────────────────────
 
 def _lang_to_code(name: str) -> str:
     return LANG_NAME_TO_CODE.get(name.lower(), name.lower()[:2] or "en")
 
 
 def parse_header_metadata(text: str, fallback_book_id: int = 0) -> dict:
-    """
-    Extract title/authors/language from the PG text header.
-
-    PG standard header format (always present at top of every book file):
-        Title: Pride and Prejudice
-        Author: Jane Austen
-        Language: English
-    """
+    """Extract title/authors/language from the PG text header (fallback)."""
     head = text[:2000]
     start = START_MARKER.search(head)
     header = head[: start.start()] if start else head
@@ -141,37 +174,225 @@ def count_words(text: str) -> int:
     return len(re.findall(r'\b\w+\b', text))
 
 
-def count_chapters(text: str) -> int:
-    return len(CHAPTER_RE.findall(text))
+# ── Plain-text fetching (fallback) ──────────────────────────────────────────
+
+async def fetch_text(book_id: int) -> str:
+    """Fetch plain-text body of a Gutenberg book. Tries multiple URL patterns."""
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        for pattern in TEXT_URL_PATTERNS:
+            url = pattern.format(id=book_id)
+            try:
+                resp = await _get_with_retry(client, url)
+                if resp.status_code == 200:
+                    logger.info(f"Fetched book {book_id} from {url}")
+                    return resp.text
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    continue
+                raise
+        raise ValueError(
+            f"No text file found for Gutenberg book {book_id} "
+            f"(tried {len(TEXT_URL_PATTERNS)} patterns)"
+        )
 
 
-async def fetch_metadata(book_id: int) -> dict:
-    """Fetch book metadata by downloading text and parsing the PG header."""
+# ── EPUB fetching (primary) ────────────────────────────────────────────────
+
+async def fetch_epub_bytes(book_id: int) -> Optional[bytes]:
+    """Download EPUB, return raw bytes or None on failure."""
+    url = EPUB_URL_PATTERN.format(id=book_id)
+    try:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            resp = await _get_with_retry(client, url)
+            if resp.status_code == 200 and len(resp.content) > 1000:
+                logger.info(f"Fetched EPUB for book {book_id} ({len(resp.content)} bytes)")
+                return resp.content
+    except Exception as e:
+        logger.warning(f"Failed to download EPUB for book {book_id}: {e}")
+    return None
+
+
+def _parse_opf(zf: zipfile.ZipFile) -> dict:
+    opf_name = next((n for n in zf.namelist() if n.endswith(".opf")), None)
+    if not opf_name:
+        raise ValueError("No .opf in EPUB")
+    root = ET.fromstring(zf.read(opf_name).decode("utf-8"))
+    title    = root.find(".//dc:title",    NS_OPF)
+    creator  = root.find(".//dc:creator",  NS_OPF)
+    language = root.find(".//dc:language", NS_OPF)
+    return {
+        "title":    (title.text   or "").strip(),
+        "authors":  [creator.text.strip()] if creator is not None and creator.text else [],
+        "language": (
+            (language.text or "en").split("-")[0].lower()
+            if language is not None and language.text else "en"
+        ),
+    }
+
+
+def _parse_nav(zf: zipfile.ZipFile) -> tuple[list[dict], str | None]:
+    """Parse NCX (EPUB2) or nav.xhtml (EPUB3). Returns (navpoints, ref_path)."""
+    ncx_name = next((n for n in zf.namelist() if n.endswith(".ncx")), None)
+    if ncx_name:
+        root = ET.fromstring(zf.read(ncx_name).decode("utf-8"))
+        result = []
+        for np in root.findall(".//ncx:navPoint", NS_NCX):
+            label = np.find("ncx:navLabel/ncx:text", NS_NCX)
+            content = np.find("ncx:content", NS_NCX)
+            if label is None or content is None:
+                continue
+            result.append({
+                "label": (label.text or "").strip(),
+                "src":   (content.get("src") or "").split("#")[0],
+            })
+        return result, ncx_name
+
+    nav_name = next((n for n in zf.namelist() if n.endswith("nav.xhtml")), None)
+    if nav_name:
+        root = ET.fromstring(zf.read(nav_name).decode("utf-8"))
+        result = []
+        for a in root.findall(".//x:a", NS_HTML):
+            label = "".join(a.itertext()).strip()
+            src = (a.get("href") or "").split("#")[0]
+            if label and src:
+                result.append({"label": label, "src": src})
+        return result, nav_name
+
+    return [], None
+
+
+def _is_chapter_label(label: str) -> bool:
+    """Decide if an EPUB navPoint label represents a real chapter."""
+    label_clean = label.strip().lower()
+    if not label_clean:
+        return False
+    if PART_RE.match(label_clean):
+        return False
+    if any(label_clean == t or label_clean.startswith(t + " ") for t in FRONTMATTER_TERMS):
+        return False
+    if CHAPTER_ANCHORED_RE.match(label.strip()):
+        return True
+    if CHAPTER_ANYWHERE_RE.search(label):
+        return True
+    return False
+
+
+def _resolve_epub_path(zf: zipfile.ZipFile, src: str, ref_path: str) -> Optional[str]:
+    if not src:
+        return None
+    ref_dir = posixpath.dirname(ref_path)
+    full = posixpath.normpath(posixpath.join(ref_dir, src)) if ref_dir else src
+    return full if full in zf.namelist() else None
+
+
+def parse_epub(epub_bytes: bytes, fallback_book_id: int = 0) -> dict:
+    """
+    Parse an EPUB and return book structure:
+      {
+        "book_id": int,
+        "title": str,
+        "authors": list[str],
+        "language": str,
+        "chapters": [{"index": int, "title": str, "text": str}, ...],
+      }
+    """
+    zf = zipfile.ZipFile(io.BytesIO(epub_bytes))
+    metadata = _parse_opf(zf)
+    nav_points, ref_path = _parse_nav(zf)
+    if not nav_points or not ref_path:
+        raise ValueError("EPUB has no NCX/nav TOC")
+
+    chapters: List[dict] = []
+    for np in nav_points:
+        if not _is_chapter_label(np["label"]):
+            continue
+        full_path = _resolve_epub_path(zf, np["src"], ref_path)
+        if not full_path:
+            continue
+        try:
+            xhtml = zf.read(full_path).decode("utf-8", errors="replace")
+        except Exception as e:
+            logger.warning(f"Failed to read {full_path}: {e}")
+            continue
+        text = _strip_html(xhtml)
+        if not text:
+            continue
+        chapters.append({
+            "index": len(chapters),
+            "title": np["label"],
+            "text":  text,
+        })
+
+    if not chapters:
+        raise ValueError("No chapters extracted from EPUB (NCX had no chapter navPoints)")
+
+    return {
+        "book_id":  fallback_book_id,
+        "title":    metadata["title"] or f"Gutenberg Book {fallback_book_id}",
+        "authors":  metadata["authors"],
+        "language": metadata["language"] or "en",
+        "chapters": chapters,
+    }
+
+
+# ── Unified book fetcher (EPUB primary, text fallback) ──────────────────────
+
+async def fetch_book(book_id: int) -> dict:
+    """
+    Fetch a Gutenberg book and return structured data with chapters.
+    Tries EPUB first; falls back to plain text if EPUB unavailable.
+    """
+    epub_bytes = await fetch_epub_bytes(book_id)
+    if epub_bytes:
+        try:
+            return parse_epub(epub_bytes, fallback_book_id=book_id)
+        except Exception as e:
+            logger.warning(f"EPUB parse failed for book {book_id}: {e}, falling back to text")
+
     text = await fetch_text(book_id)
     meta = parse_header_metadata(text, fallback_book_id=book_id)
+    chunks = split_text_structured(text)
+    chapters = [
+        {"index": i, "title": f"Part {i+1}", "text": c}
+        for i, c in enumerate(chunks)
+    ]
     return {
         "book_id":  book_id,
         "title":    meta["title"],
         "authors":  meta["authors"],
         "language": meta["language"],
+        "chapters": chapters,
     }
 
 
+# ── Public API used by the admin preview endpoint ──────────────────────────
+
 async def preview_book(book_id: int) -> dict:
     """
-    Fetch text from gutenberg.org and return a preview payload
-    matching GutenbergBookInfo (book_id, title, authors, language,
+    Fetch book from Gutenberg and return preview payload matching
+    GutenbergBookInfo (book_id, title, authors, language,
     word_count, num_chapters, num_chunks).
     """
-    text = await fetch_text(book_id)
-    meta = parse_header_metadata(text, fallback_book_id=book_id)
-    chunks = split_text_structured(text)
+    book = await fetch_book(book_id)
+    chapters = book["chapters"]
+    word_count = sum(count_words(ch["text"]) for ch in chapters)
     return {
         "book_id":      book_id,
-        "title":        meta["title"],
-        "authors":      meta["authors"],
-        "language":     meta["language"],
-        "word_count":   sum(count_words(c) for c in chunks),
-        "num_chapters": count_chapters(text),
-        "num_chunks":   len(chunks),
+        "title":        book["title"],
+        "authors":      book["authors"],
+        "language":     book["language"],
+        "word_count":   word_count,
+        "num_chapters": len(chapters),
+        "num_chunks":   len(chapters),
+    }
+
+
+async def fetch_metadata(book_id: int) -> dict:
+    """Fetch book metadata only (title, authors, language)."""
+    book = await fetch_book(book_id)
+    return {
+        "book_id":  book_id,
+        "title":    book["title"],
+        "authors":  book["authors"],
+        "language": book["language"],
     }

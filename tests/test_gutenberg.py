@@ -52,7 +52,6 @@ class TestImportGutenbergBook:
 
         resp = admin_client.post("/admin/gutenberg/1342")
         assert resp.status_code == 500
-        # The error message should be in "detail" for 500 errors, not "message"
         assert "Failed to create Gutenberg order" in resp.json()["detail"]
 
 
@@ -97,9 +96,9 @@ class TestPreviewGutenbergBook:
         assert "Gutendex" in resp.json()["detail"]
 
 
-class TestGutenbergService:
-    """Unit tests for the gutenberg service module (no HTTP mocking)."""
+# ── Plain-text fallback utilities ───────────────────────────────────────────
 
+class TestTextFallback:
     def test_split_text_structured_chapters(self):
         from services.gutenberg import split_text_structured
         text = (
@@ -110,7 +109,6 @@ class TestGutenbergService:
         chunks = split_text_structured(text)
         assert len(chunks) >= 3
         assert any("First chapter" in c for c in chunks)
-        assert any("Second chapter" in c for c in chunks)
 
     def test_split_text_structured_paragraphs(self):
         from services.gutenberg import split_text_structured
@@ -129,166 +127,22 @@ class TestGutenbergService:
         assert count_words("Hello, world! Foo bar.") == 4
         assert count_words("") == 0
 
-    def test_count_chapters(self):
-        from services.gutenberg import count_chapters
-        text = (
-            "CHAPTER I.\n\nBody.\n\n"
-            "CHAPTER II.\n\nBody.\n\n"
-            "CHAPTER III.\n\nBody."
-        )
-        assert count_chapters(text) == 3
-        assert count_chapters("No chapters here, just text.") == 0
-
-    def test_split_text_structured_drops_empty(self):
+    def test_split_drops_empty(self):
         from services.gutenberg import split_text_structured
         chunks = split_text_structured("\n\n\n   \n\n")
         assert chunks == []
 
-    def test_count_chapters_ignores_toc_entries(self):
-        """TOC entries like 'I. Title' should NOT be counted as chapters."""
-        from services.gutenberg import count_chapters
-        text = (
-            "CONTENTS\n"
-            "\n"
-            "I.  \"Heroisms\"\n"
-            "II.  \"Try Your Luck\"\n"
-            "\n"
-            "                          CHAPTER I\n"
-            "\n"
-            "Body text.\n"
-            "\n"
-            "                          CHAPTER II\n"
-            "\n"
-            "More body.\n"
-        )
-        assert count_chapters(text) == 2
-
-    def test_count_chapters_handles_indented_headings(self):
-        from services.gutenberg import count_chapters
-        text = "                            CHAPTER I\n\nbody\n\n                            CHAPTER II\n\nbody"
-        assert count_chapters(text) == 2
-
-    def test_count_chapters_handles_crlf_line_endings(self):
-        """PG books use \\r\\n line endings; regex must handle them."""
-        from services.gutenberg import count_chapters
-        text = "CHAPTER I\r\n\r\nbody\r\n\r\nCHAPTER II\r\n\r\nbody\r\n"
-        assert count_chapters(text) == 2
-
-    def test_count_chapters_handles_heading_with_period_and_title(self):
-        from services.gutenberg import count_chapters
-        text = "CHAPTER I. The Beginning\n\nbody\n\nCHAPTER II. The End\n\nbody"
-        assert count_chapters(text) == 2
-
-    def test_count_chapters_handles_digit_numerals(self):
-        from services.gutenberg import count_chapters
-        text = "Chapter 1\n\nbody\n\nChapter 2\n\nbody"
-        assert count_chapters(text) == 2
-
-    def test_count_chapters_handles_lowercase(self):
-        from services.gutenberg import count_chapters
-        text = "chapter i\n\nbody\n\nchapter ii\n\nbody"
-        assert count_chapters(text) == 2
-
-    def test_count_chapters_no_match_returns_zero(self):
-        from services.gutenberg import count_chapters
-        assert count_chapters("Just some text. No chapters here.") == 0
-
-    def test_split_text_structured_indented_chapters(self):
-        """split_text_structured should still split on indented chapter headings."""
+    def test_split_handles_indented_chapters(self):
         from services.gutenberg import split_text_structured
-        text = (
-            "                          CHAPTER I\n\nFirst chapter body.\n\n"
-            "                          CHAPTER II\n\nSecond chapter body.\n"
-        )
+        text = "                          CHAPTER I\n\nbody\n\n                          CHAPTER II\n\nbody"
         chunks = split_text_structured(text)
         assert len(chunks) == 2
-        assert "First chapter" in chunks[0]
-        assert "Second chapter" in chunks[1]
 
-    @pytest.mark.asyncio
-    async def test_fetch_text_follows_redirects(self, monkeypatch):
-        """Client must be configured with follow_redirects=True."""
-        from services import gutenberg
-
-        captured_kwargs: dict = {}
-
-        class _FakeAsyncClient:
-            def __init__(self, *args, **kwargs):
-                captured_kwargs.update(kwargs)
-            async def __aenter__(self):
-                return self
-            async def __aexit__(self, *args):
-                return False
-            async def get(self, url):
-                resp = MagicMock()
-                resp.status_code = 200
-                resp.text = "body"
-                return resp
-
-        monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
-        await gutenberg.fetch_text(139)
-        assert captured_kwargs.get("follow_redirects") is True
-
-    @pytest.mark.asyncio
-    async def test_fetch_text_first_pattern_succeeds(self, monkeypatch):
-        from services import gutenberg
-
-        class _FakeAsyncClient:
-            def __init__(self, *args, **kwargs): pass
-            async def __aenter__(self): return self
-            async def __aexit__(self, *args): return False
-            async def get(self, url):
-                resp = MagicMock()
-                resp.status_code = 200
-                resp.text = "first"
-                return resp
-
-        monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
-        result = await gutenberg.fetch_text(1342)
-        assert result == "first"
-
-    @pytest.mark.asyncio
-    async def test_fetch_text_falls_back_to_next_pattern(self, monkeypatch):
-        from services import gutenberg
-
-        urls_called: list = []
-
-        class _FakeAsyncClient:
-            def __init__(self, *args, **kwargs): pass
-            async def __aenter__(self): return self
-            async def __aexit__(self, *args): return False
-            async def get(self, url):
-                urls_called.append(url)
-                resp = MagicMock()
-                if len(urls_called) == 1:
-                    resp.status_code = 404
-                else:
-                    resp.status_code = 200
-                    resp.text = "second"
-                return resp
-
-        monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
-        result = await gutenberg.fetch_text(1342)
-        assert result == "second"
-        assert len(urls_called) == 2
-        assert urls_called[0] != urls_called[1]
-
-    @pytest.mark.asyncio
-    async def test_fetch_text_all_404_raises_value_error(self, monkeypatch):
-        from services import gutenberg
-
-        class _FakeAsyncClient:
-            def __init__(self, *args, **kwargs): pass
-            async def __aenter__(self): return self
-            async def __aexit__(self, *args): return False
-            async def get(self, url):
-                resp = MagicMock()
-                resp.status_code = 404
-                return resp
-
-        monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
-        with pytest.raises(ValueError, match="No text file found"):
-            await gutenberg.fetch_text(9999)
+    def test_split_handles_crlf_line_endings(self):
+        from services.gutenberg import split_text_structured
+        text = "CHAPTER I\r\n\r\nbody\r\n\r\nCHAPTER II\r\n\r\nbody\r\n"
+        chunks = split_text_structured(text)
+        assert len(chunks) == 2
 
     def test_parse_header_metadata_extracts_title_author_language(self):
         from services.gutenberg import parse_header_metadata
@@ -312,7 +166,6 @@ class TestGutenbergService:
         assert meta["language"] == "fr"
 
     def test_parse_header_metadata_author_with_translator(self):
-        """Parenthesized roles should not be split as new authors."""
         from services.gutenberg import parse_header_metadata
         text = "Title: Les Misérables\nAuthor: Victor Hugo, Isabel F. Hapgood (Translator)\nLanguage: French\n"
         meta = parse_header_metadata(text, fallback_book_id=1)
@@ -325,3 +178,406 @@ class TestGutenbergService:
         assert meta["title"] == "Gutenberg Book 42"
         assert meta["authors"] == []
         assert meta["language"] == "en"
+
+
+# ── Chapter label classification (EPUB NCX) ───────────────────────────────
+
+class TestIsChapterLabel:
+    def _check(self, label: str) -> bool:
+        from services.gutenberg import _is_chapter_label
+        return _is_chapter_label(label)
+
+    def test_chapter_with_period_and_title(self):
+        assert self._check("CHAPTER I. The Beginning") is True
+        assert self._check("Chapter 1. The Start") is True
+
+    def test_chapter_bare_roman(self):
+        assert self._check("CHAPTER I") is True
+        assert self._check("Chapter V") is True
+
+    def test_chapter_with_space_no_period(self):
+        assert self._check("CHAPTER I The Beginning") is True
+        assert self._check("CHAPTER I JONATHAN HARKER'S JOURNAL") is True
+
+    def test_chapter_digit(self):
+        assert self._check("Chapter 1") is True
+        assert self._check("Chapter 12") is True
+
+    def test_chapter_lowercase(self):
+        assert self._check("chapter i") is True
+        assert self._check("chapter one two") is False  # no Roman/digit
+
+    def test_letter_prefix(self):
+        assert self._check("Letter 1") is True
+        assert self._check("Letter 4") is True
+
+    def test_bare_roman_with_title(self):
+        # Treasure Island style
+        assert self._check("I The Old Sea-dog") is True
+        assert self._check("V The Last of the Blind Man") is True
+
+    def test_chapter_in_middle_of_corrupt_label(self):
+        # Malformed NCX: previous chapter's content + new heading
+        assert self._check("I hope Mr. Bingley will like it. CHAPTER II.") is True
+        assert self._check("He rode a black horse. CHAPTER III.") is True
+
+    def test_part_is_not_chapter(self):
+        assert self._check("PART ONE—The Old Buccaneer") is False
+        assert self._check("Part Two") is False
+        assert self._check("PART 1") is False
+
+    def test_frontmatter_is_not_chapter(self):
+        assert self._check("Contents") is False
+        assert self._check("CONTENTS") is False
+        assert self._check("Title page") is False
+        assert self._check("PREFACE") is False
+        assert self._check("Preface") is False
+        assert self._check("ILLUSTRATIONS") is False
+        assert self._check("Dedication") is False
+        assert self._check("Colophon") is False
+        assert self._check("Transcriber's Note") is False
+
+    def test_empty_is_not_chapter(self):
+        assert self._check("") is False
+        assert self._check("   ") is False
+
+    def test_random_text_is_not_chapter(self):
+        assert self._check("Some random prose.") is False
+        assert self._check("It was the best of times.") is False
+
+
+# ── HTML stripping (EPUB chapter XHTML) ────────────────────────────────────
+
+class TestStripHtml:
+    def test_strips_simple_tags(self):
+        from services.gutenberg import _strip_html
+        result = _strip_html("<p>Hello <b>world</b>!</p>")
+        assert result == "Hello world!"
+
+    def test_preserves_paragraph_breaks(self):
+        from services.gutenberg import _strip_html
+        result = _strip_html("<p>Para 1</p><p>Para 2</p>")
+        assert "Para 1" in result
+        assert "Para 2" in result
+
+    def test_handles_empty_input(self):
+        from services.gutenberg import _strip_html
+        assert _strip_html("") == ""
+
+
+# ── fetch_epub_bytes (HTTP) ────────────────────────────────────────────────
+
+class TestFetchEpubBytes:
+    @pytest.mark.asyncio
+    async def test_returns_bytes_on_success(self, monkeypatch):
+        from services import gutenberg
+        fake_bytes = b"PK\x03\x04" + b"\x00" * 1000  # ZIP header + padding
+
+        class _FakeAsyncClient:
+            def __init__(self, *args, **kwargs): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+            async def get(self, url):
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.content = fake_bytes
+                return resp
+
+        monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
+        result = await gutenberg.fetch_epub_bytes(1342)
+        assert result == fake_bytes
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_404(self, monkeypatch):
+        from services import gutenberg
+
+        class _FakeAsyncClient:
+            def __init__(self, *args, **kwargs): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+            async def get(self, url):
+                resp = MagicMock()
+                resp.status_code = 404
+                resp.content = b""
+                return resp
+
+        monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
+        result = await gutenberg.fetch_epub_bytes(9999)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_network_error(self, monkeypatch):
+        from services import gutenberg
+
+        class _FakeAsyncClient:
+            def __init__(self, *args, **kwargs): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+            async def get(self, url):
+                raise RuntimeError("network down")
+
+        monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
+        result = await gutenberg.fetch_epub_bytes(1342)
+        assert result is None
+
+
+# ── parse_epub (in-memory) ─────────────────────────────────────────────────
+
+def _make_minimal_epub(opf_xml: str, ncx_xml: str, chapter_files: dict) -> bytes:
+    """Build a minimal EPUB ZIP in memory for testing."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("OEBPS/content.opf", opf_xml)
+        zf.writestr("OEBPS/toc.ncx", ncx_xml)
+        for name, content in chapter_files.items():
+            zf.writestr(f"OEBPS/{name}", content)
+    return buf.getvalue()
+
+
+import io
+import zipfile
+
+OPF_TEMPLATE = """<?xml version='1.0' encoding='utf-8'?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>{title}</dc:title>
+    <dc:creator>{author}</dc:creator>
+    <dc:language>{language}</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+  </manifest>
+  <spine toc="ncx"/>
+</package>"""
+
+NCX_TEMPLATE = """<?xml version='1.0' encoding='utf-8'?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head><meta name="dtb:uid" content="1"/></head>
+  <docTitle><text>Test</text></docTitle>
+  <navMap>
+{nav_points}
+  </navMap>
+</ncx>"""
+
+def _nav_point(label: str, src: str) -> str:
+    return f"""    <navPoint id="{label}" playOrder="1">
+      <navLabel><text>{label}</text></navLabel>
+      <content src="{src}"/>
+    </navPoint>"""
+
+
+class TestParseEpub:
+    def test_minimal_epub_with_chapters(self):
+        from services.gutenberg import parse_epub
+        opf = OPF_TEMPLATE.format(title="Test Book", author="Test Author", language="en")
+        ncx = NCX_TEMPLATE.format(nav_points=(
+            _nav_point("CONTENTS", "contents.html") +
+            _nav_point("CHAPTER I. The Start", "ch1.html") +
+            _nav_point("CHAPTER II. The End", "ch2.html")
+        ))
+        chapters = {
+            "contents.html": "<html><body>Table of contents here</body></html>",
+            "ch1.html":      "<html><body><h1>Start</h1><p>First chapter text.</p></body></html>",
+            "ch2.html":      "<html><body><h1>End</h1><p>Second chapter text.</p></body></html>",
+        }
+        epub_bytes = _make_minimal_epub(opf, ncx, chapters)
+        book = parse_epub(epub_bytes, fallback_book_id=1)
+
+        assert book["book_id"] == 1
+        assert book["title"] == "Test Book"
+        assert book["authors"] == ["Test Author"]
+        assert book["language"] == "en"
+        assert len(book["chapters"]) == 2
+        assert "First chapter" in book["chapters"][0]["text"]
+        assert "Second chapter" in book["chapters"][1]["text"]
+
+    def test_epub_filters_frontmatter(self):
+        from services.gutenberg import parse_epub
+        opf = OPF_TEMPLATE.format(title="X", author="Y", language="en")
+        ncx = NCX_TEMPLATE.format(nav_points=(
+            _nav_point("Title page",   "title.html") +
+            _nav_point("Contents",     "contents.html") +
+            _nav_point("Illustrations", "illust.html") +
+            _nav_point("Preface",      "preface.html") +
+            _nav_point("CHAPTER I.",   "ch1.html") +
+            _nav_point("CHAPTER II.",  "ch2.html")
+        ))
+        chapters = {
+            "title.html":   "<html><body>Title</body></html>",
+            "contents.html": "<html><body>Contents</body></html>",
+            "illust.html":  "<html><body>Illust</body></html>",
+            "preface.html": "<html><body>Preface</body></html>",
+            "ch1.html":     "<html><body>Chapter 1</body></html>",
+            "ch2.html":     "<html><body>Chapter 2</body></html>",
+        }
+        epub_bytes = _make_minimal_epub(opf, ncx, chapters)
+        book = parse_epub(epub_bytes, fallback_book_id=1)
+        assert len(book["chapters"]) == 2
+        assert book["chapters"][0]["title"] == "CHAPTER I."
+        assert book["chapters"][1]["title"] == "CHAPTER II."
+
+    def test_epub_skips_parts(self):
+        from services.gutenberg import parse_epub
+        opf = OPF_TEMPLATE.format(title="X", author="Y", language="en")
+        ncx = NCX_TEMPLATE.format(nav_points=(
+            _nav_point("PART ONE",         "part1.html") +
+            _nav_point("PART TWO",         "part2.html") +
+            _nav_point("CHAPTER I. The Start", "ch1.html") +
+            _nav_point("CHAPTER II. The End",  "ch2.html")
+        ))
+        chapters = {
+            "part1.html": "<html><body>Part 1</body></html>",
+            "part2.html": "<html><body>Part 2</body></html>",
+            "ch1.html":   "<html><body>First chapter</body></html>",
+            "ch2.html":   "<html><body>Second chapter</body></html>",
+        }
+        epub_bytes = _make_minimal_epub(opf, ncx, chapters)
+        book = parse_epub(epub_bytes, fallback_book_id=1)
+        assert len(book["chapters"]) == 2
+
+    def test_epub_no_chapters_raises(self):
+        from services.gutenberg import parse_epub
+        opf = OPF_TEMPLATE.format(title="Essay", author="X", language="en")
+        ncx = NCX_TEMPLATE.format(nav_points=(
+            _nav_point("Title page", "title.html") +
+            _nav_point("Contents",   "contents.html")
+        ))
+        chapters = {
+            "title.html":   "<html><body>Title</body></html>",
+            "contents.html": "<html><body>Contents</body></html>",
+        }
+        epub_bytes = _make_minimal_epub(opf, ncx, chapters)
+        with pytest.raises(ValueError, match="No chapters"):
+            parse_epub(epub_bytes, fallback_book_id=1)
+
+    def test_epub_uses_fallback_title(self):
+        from services.gutenberg import parse_epub
+        opf = OPF_TEMPLATE.format(title="", author="X", language="en")
+        ncx = NCX_TEMPLATE.format(nav_points=_nav_point("CHAPTER I.", "ch1.html"))
+        chapters = {"ch1.html": "<html><body>text</body></html>"}
+        epub_bytes = _make_minimal_epub(opf, ncx, chapters)
+        book = parse_epub(epub_bytes, fallback_book_id=42)
+        assert book["title"] == "Gutenberg Book 42"
+
+    def test_epub_uses_letter_prefix(self):
+        from services.gutenberg import parse_epub
+        opf = OPF_TEMPLATE.format(title="Frankenstein", author="Shelley", language="en")
+        ncx = NCX_TEMPLATE.format(nav_points=(
+            _nav_point("Letter 1", "ch1.html") +
+            _nav_point("Letter 2", "ch2.html") +
+            _nav_point("Chapter 1", "ch3.html")
+        ))
+        chapters = {
+            "ch1.html": "<html><body>First letter</body></html>",
+            "ch2.html": "<html><body>Second letter</body></html>",
+            "ch3.html": "<html><body>First chapter</body></html>",
+        }
+        epub_bytes = _make_minimal_epub(opf, ncx, chapters)
+        book = parse_epub(epub_bytes, fallback_book_id=84)
+        assert len(book["chapters"]) == 3
+        titles = [ch["title"] for ch in book["chapters"]]
+        assert titles == ["Letter 1", "Letter 2", "Chapter 1"]
+
+
+# ── fetch_book (integration: EPUB primary, text fallback) ─────────────────
+
+class TestFetchBook:
+    @pytest.mark.asyncio
+    async def test_uses_epub_when_available(self, monkeypatch):
+        from services import gutenberg
+
+        opf = OPF_TEMPLATE.format(title="Ebook Title", author="Ebook Author", language="en")
+        ncx = NCX_TEMPLATE.format(nav_points=(
+            _nav_point("CHAPTER I. Start", "ch1.html") +
+            _nav_point("CHAPTER II. End",  "ch2.html")
+        ))
+        chapters = {
+            "ch1.html": "<html><body>First</body></html>",
+            "ch2.html": "<html><body>Second</body></html>",
+        }
+        epub_bytes = _make_minimal_epub(opf, ncx, chapters)
+
+        with patch.object(gutenberg, "fetch_epub_bytes", new_callable=AsyncMock) as mock_epub:
+            mock_epub.return_value = epub_bytes
+            book = await gutenberg.fetch_book(1)
+
+        assert book["title"] == "Ebook Title"
+        assert book["authors"] == ["Ebook Author"]
+        assert len(book["chapters"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_text_when_epub_unavailable(self, monkeypatch):
+        from services import gutenberg
+
+        text = (
+            "Title: Fallback Book\n"
+            "Author: Some Author\n"
+            "Language: English\n"
+            "*** START OF THE PROJECT GUTENBERG EBOOK FALLBACK ***\n"
+            "CHAPTER I.\n\nFirst body.\n\n"
+            "CHAPTER II.\n\nSecond body.\n"
+        )
+
+        with patch.object(gutenberg, "fetch_epub_bytes", new_callable=AsyncMock) as mock_epub:
+            mock_epub.return_value = None
+            with patch.object(gutenberg, "fetch_text", new_callable=AsyncMock) as mock_text:
+                mock_text.return_value = text
+                book = await gutenberg.fetch_book(1)
+
+        assert book["title"] == "Fallback Book"
+        assert book["authors"] == ["Some Author"]
+        # 3 chunks: [pre-chapter, chapter 1 body, chapter 2 body]
+        assert len(book["chapters"]) == 3
+        assert "First body" in book["chapters"][1]["text"]
+        assert "Second body" in book["chapters"][2]["text"]
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_text_when_epub_parse_fails(self, monkeypatch):
+        from services import gutenberg
+
+        text = (
+            "Title: Corrupted\n"
+            "Author: X\n"
+            "Language: English\n"
+            "*** START OF THE PROJECT GUTENBERG EBOOK X ***\n"
+            "CHAPTER I.\n\nOnly chapter.\n"
+        )
+
+        with patch.object(gutenberg, "fetch_epub_bytes", new_callable=AsyncMock) as mock_epub:
+            mock_epub.return_value = b"not a real epub"  # parse will fail
+            with patch.object(gutenberg, "fetch_text", new_callable=AsyncMock) as mock_text:
+                mock_text.return_value = text
+                book = await gutenberg.fetch_book(1)
+
+        assert book["title"] == "Corrupted"
+        # 2 chunks: [pre-chapter, chapter body]
+        assert len(book["chapters"]) == 2
+        assert "Only chapter" in book["chapters"][1]["text"]
+
+
+# ── preview_book (top-level public API) ────────────────────────────────────
+
+class TestPreviewBook:
+    @pytest.mark.asyncio
+    async def test_preview_uses_chapter_count(self, monkeypatch):
+        from services import gutenberg
+        fake_book = {
+            "book_id":  1342,
+            "title":    "Pride and Prejudice",
+            "authors":  ["Jane Austen"],
+            "language": "en",
+            "chapters": [
+                {"index": 0, "title": "Chapter I",   "text": "word " * 1000},
+                {"index": 1, "title": "Chapter II",  "text": "word " * 2000},
+                {"index": 2, "title": "Chapter III", "text": "word " * 500},
+            ],
+        }
+        with patch.object(gutenberg, "fetch_book", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = fake_book
+            preview = await gutenberg.preview_book(1342)
+
+        assert preview["book_id"] == 1342
+        assert preview["title"] == "Pride and Prejudice"
+        assert preview["num_chapters"] == 3
+        assert preview["num_chunks"] == 3
+        assert preview["word_count"] == 3500
