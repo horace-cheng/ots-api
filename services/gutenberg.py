@@ -27,7 +27,8 @@ TEXT_URL_PATTERNS = [
 ]
 
 CHAPTER_RE = re.compile(
-    r'(CHAPTER\s+[IVXLCDM\d]+(?:\..*?\n.*?))', re.IGNORECASE | re.DOTALL
+    r'^[ \t]*CHAPTER[ \t]+[IVXLCDM\d]+[^\n]*$',
+    re.IGNORECASE | re.MULTILINE,
 )
 META_RE = re.compile(r'^(Title|Author|Language)\s*:\s*(.+?)\s*$', re.MULTILINE)
 START_MARKER = re.compile(

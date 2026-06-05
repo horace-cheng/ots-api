@@ -144,6 +144,67 @@ class TestGutenbergService:
         chunks = split_text_structured("\n\n\n   \n\n")
         assert chunks == []
 
+    def test_count_chapters_ignores_toc_entries(self):
+        """TOC entries like 'I. Title' should NOT be counted as chapters."""
+        from services.gutenberg import count_chapters
+        text = (
+            "CONTENTS\n"
+            "\n"
+            "I.  \"Heroisms\"\n"
+            "II.  \"Try Your Luck\"\n"
+            "\n"
+            "                          CHAPTER I\n"
+            "\n"
+            "Body text.\n"
+            "\n"
+            "                          CHAPTER II\n"
+            "\n"
+            "More body.\n"
+        )
+        assert count_chapters(text) == 2
+
+    def test_count_chapters_handles_indented_headings(self):
+        from services.gutenberg import count_chapters
+        text = "                            CHAPTER I\n\nbody\n\n                            CHAPTER II\n\nbody"
+        assert count_chapters(text) == 2
+
+    def test_count_chapters_handles_crlf_line_endings(self):
+        """PG books use \\r\\n line endings; regex must handle them."""
+        from services.gutenberg import count_chapters
+        text = "CHAPTER I\r\n\r\nbody\r\n\r\nCHAPTER II\r\n\r\nbody\r\n"
+        assert count_chapters(text) == 2
+
+    def test_count_chapters_handles_heading_with_period_and_title(self):
+        from services.gutenberg import count_chapters
+        text = "CHAPTER I. The Beginning\n\nbody\n\nCHAPTER II. The End\n\nbody"
+        assert count_chapters(text) == 2
+
+    def test_count_chapters_handles_digit_numerals(self):
+        from services.gutenberg import count_chapters
+        text = "Chapter 1\n\nbody\n\nChapter 2\n\nbody"
+        assert count_chapters(text) == 2
+
+    def test_count_chapters_handles_lowercase(self):
+        from services.gutenberg import count_chapters
+        text = "chapter i\n\nbody\n\nchapter ii\n\nbody"
+        assert count_chapters(text) == 2
+
+    def test_count_chapters_no_match_returns_zero(self):
+        from services.gutenberg import count_chapters
+        assert count_chapters("Just some text. No chapters here.") == 0
+
+    def test_split_text_structured_indented_chapters(self):
+        """split_text_structured should still split on indented chapter headings."""
+        from services.gutenberg import split_text_structured
+        text = (
+            "                          CHAPTER I\n\nFirst chapter body.\n\n"
+            "                          CHAPTER II\n\nSecond chapter body.\n"
+        )
+        chunks = split_text_structured(text)
+        assert len(chunks) == 2
+        assert "First chapter" in chunks[0]
+        assert "Second chapter" in chunks[1]
+
     @pytest.mark.asyncio
     async def test_fetch_text_follows_redirects(self, monkeypatch):
         """Client must be configured with follow_redirects=True."""
