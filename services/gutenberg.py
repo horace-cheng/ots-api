@@ -231,7 +231,14 @@ def _parse_opf(zf: zipfile.ZipFile) -> dict:
 
 
 def _parse_nav(zf: zipfile.ZipFile) -> tuple[list[dict], str | None]:
-    """Parse NCX (EPUB2) or nav.xhtml (EPUB3). Returns (navpoints, ref_path)."""
+    """Parse NCX (EPUB2) or nav.xhtml (EPUB3). Returns (navpoints, ref_path).
+
+    Each navpoint has:
+        "label": str           — display label
+        "src":   str           — HTML file path (may have fragment stripped)
+        "anchor": str | None   — fragment id without '#' (e.g. "pgepubid00008")
+                                 None when src has no fragment or nav is EPUB3 <a href>
+    """
     ncx_name = next((n for n in zf.namelist() if n.endswith(".ncx")), None)
     if ncx_name:
         root = ET.fromstring(zf.read(ncx_name).decode("utf-8"))
@@ -241,9 +248,15 @@ def _parse_nav(zf: zipfile.ZipFile) -> tuple[list[dict], str | None]:
             content = np.find("ncx:content", NS_NCX)
             if label is None or content is None:
                 continue
+            raw_src = content.get("src") or ""
+            if "#" in raw_src:
+                src, _, anchor = raw_src.partition("#")
+            else:
+                src, anchor = raw_src, None
             result.append({
-                "label": (label.text or "").strip(),
-                "src":   (content.get("src") or "").split("#")[0],
+                "label":  (label.text or "").strip(),
+                "src":    src,
+                "anchor": anchor or None,
             })
         return result, ncx_name
 
@@ -253,9 +266,13 @@ def _parse_nav(zf: zipfile.ZipFile) -> tuple[list[dict], str | None]:
         result = []
         for a in root.findall(".//x:a", NS_HTML):
             label = "".join(a.itertext()).strip()
-            src = (a.get("href") or "").split("#")[0]
+            raw_href = a.get("href") or ""
+            if "#" in raw_href:
+                src, _, anchor = raw_href.partition("#")
+            else:
+                src, anchor = raw_href, None
             if label and src:
-                result.append({"label": label, "src": src})
+                result.append({"label": label, "src": src, "anchor": anchor or None})
         return result, nav_name
 
     return [], None
@@ -283,6 +300,35 @@ def _resolve_epub_path(zf: zipfile.ZipFile, src: str, ref_path: str) -> Optional
     ref_dir = posixpath.dirname(ref_path)
     full = posixpath.normpath(posixpath.join(ref_dir, src)) if ref_dir else src
     return full if full in zf.namelist() else None
+
+
+def _extract_anchored_section(xhtml: str, anchor: Optional[str]) -> str:
+    """
+    If anchor is None, return the full XHTML unchanged.
+    Otherwise extract the slice of XHTML that begins at the element
+    with id="anchor" and ends at the next element with any id attribute
+    (or the end of the document). Used to handle EPUBs where multiple
+    navPoints point into the same XHTML file using #fragment anchors —
+    without this, the whole file would be returned for every chapter and
+    the same text would be counted multiple times.
+    """
+    if not anchor:
+        return xhtml
+    # Split on the start of any element carrying an id="..." attribute
+    # (covers <a id="...">, <div id="...">, <h1 id="...">, etc.).
+    parts = re.split(r'(<[^>]*\sid="[^"]+"[^>]*>)', xhtml)
+    start_idx = None
+    for i, part in enumerate(parts):
+        if f'id="{anchor}"' in part:
+            start_idx = i
+            break
+    if start_idx is None:
+        return xhtml
+    # Find next part that opens another id="..." element
+    for j in range(start_idx + 1, len(parts)):
+        if re.match(r'<[^>]*\sid="[^"]+"', parts[j]):
+            return "".join(parts[start_idx:j])
+    return "".join(parts[start_idx:])
 
 
 def parse_epub(epub_bytes: bytes, fallback_book_id: int = 0) -> dict:
@@ -314,7 +360,8 @@ def parse_epub(epub_bytes: bytes, fallback_book_id: int = 0) -> dict:
         except Exception as e:
             logger.warning(f"Failed to read {full_path}: {e}")
             continue
-        text = _strip_html(xhtml)
+        section = _extract_anchored_section(xhtml, np.get("anchor"))
+        text = _strip_html(section)
         if not text:
             continue
         chapters.append({

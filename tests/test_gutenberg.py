@@ -497,6 +497,56 @@ class TestParseEpub:
         titles = [ch["title"] for ch in book["chapters"]]
         assert titles == ["Letter 1", "Letter 2", "Chapter 1"]
 
+    def test_epub_with_fragment_anchors_extracts_section(self):
+        # Real EPUBs (e.g. book 139) put 2-3 chapters in one HTML file
+        # separated by id="pgepubidNNNN" anchors. Verify each navPoint
+        # only gets its own slice — NOT the whole file.
+        from services.gutenberg import parse_epub
+        opf = OPF_TEMPLATE.format(title="Lost World", author="Doyle", language="en")
+        # Three navPoints pointing to the SAME file with different anchors
+        ncx = NCX_TEMPLATE.format(nav_points=(
+            _nav_point("CHAPTER I. Heroisms", "ch.html#pgepubid00008") +
+            _nav_point("CHAPTER II. Try Your Luck", "ch.html#pgepubid00009") +
+            _nav_point("CHAPTER III. Impossible Person", "ch.html#pgepubid00010")
+        ))
+        shared_chapter_file = """<html><body>
+<a id="pgepubid00008"></a><h1>Chapter I</h1><p>Chapter one body text.</p>
+<a id="pgepubid00009"></a><h1>Chapter II</h1><p>Chapter two body text.</p>
+<a id="pgepubid00010"></a><h1>Chapter III</h1><p>Chapter three body text.</p>
+</body></html>"""
+        epub_bytes = _make_minimal_epub(opf, ncx, {"ch.html": shared_chapter_file})
+        book = parse_epub(epub_bytes, fallback_book_id=139)
+
+        assert len(book["chapters"]) == 3
+        texts = [ch["text"] for ch in book["chapters"]]
+        # Each chapter should contain ONLY its own body, not the others
+        assert "Chapter one body text" in texts[0]
+        assert "Chapter one body text" not in texts[1]
+        assert "Chapter two body text" in texts[1]
+        assert "Chapter two body text" not in texts[2]
+        assert "Chapter three body text" in texts[2]
+        # No chapter should contain all three bodies
+        for t in texts:
+            assert t.count("body text") == 1, f"Expected exactly 1 body, got: {t!r}"
+
+    def test_epub_without_fragment_reads_full_file(self):
+        # Backward compat: navPoints without #fragment still get the
+        # entire XHTML (this is the common case for newer EPUBs).
+        from services.gutenberg import parse_epub
+        opf = OPF_TEMPLATE.format(title="Test", author="Author", language="en")
+        ncx = NCX_TEMPLATE.format(nav_points=(
+            _nav_point("CHAPTER I. One", "ch1.html") +
+            _nav_point("CHAPTER II. Two", "ch2.html")
+        ))
+        chapters = {
+            "ch1.html": "<html><body>One body</body></html>",
+            "ch2.html": "<html><body>Two body</body></html>",
+        }
+        epub_bytes = _make_minimal_epub(opf, ncx, chapters)
+        book = parse_epub(epub_bytes, fallback_book_id=1)
+        assert book["chapters"][0]["text"] == "One body"
+        assert book["chapters"][1]["text"] == "Two body"
+
 
 # ── fetch_book (integration: EPUB primary, text fallback) ─────────────────
 
