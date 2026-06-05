@@ -143,3 +143,94 @@ class TestGutenbergService:
         from services.gutenberg import split_text_structured
         chunks = split_text_structured("\n\n\n   \n\n")
         assert chunks == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_metadata_follows_redirects(self, monkeypatch):
+        """gutendex.com 301-redirects /books/N -> /books/N/; client must follow."""
+        from services import gutenberg
+
+        captured_kwargs: dict = {}
+
+        class _FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                captured_kwargs.update(kwargs)
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                return False
+            async def get(self, url):
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.json.return_value = {
+                    "id": 139, "title": "Test", "authors": [], "languages": ["en"],
+                }
+                return resp
+
+        monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
+        result = await gutenberg.fetch_metadata(139)
+        assert captured_kwargs.get("follow_redirects") is True
+        assert result["book_id"] == 139
+        assert result["title"] == "Test"
+
+    @pytest.mark.asyncio
+    async def test_fetch_text_follows_redirects(self, monkeypatch):
+        from services import gutenberg
+
+        captured_kwargs: dict = {}
+
+        class _FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                captured_kwargs.update(kwargs)
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                return False
+            async def get(self, url):
+                resp = MagicMock()
+                resp.status_code = 200
+                if "books/139" in url:
+                    resp.json.return_value = {
+                        "formats": {"text/plain; charset=us-ascii": "http://example.com/book.txt"}
+                    }
+                else:
+                    resp.text = "body"
+                return resp
+
+        monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
+        await gutenberg.fetch_text(139)
+        assert captured_kwargs.get("follow_redirects") is True
+
+    @pytest.mark.asyncio
+    async def test_fetch_metadata_404_raises_value_error(self, monkeypatch):
+        from services import gutenberg
+
+        class _FakeAsyncClient:
+            def __init__(self, *args, **kwargs): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+            async def get(self, url):
+                resp = MagicMock()
+                resp.status_code = 404
+                return resp
+
+        monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
+        with pytest.raises(ValueError, match="9999"):
+            await gutenberg.fetch_metadata(9999)
+
+    @pytest.mark.asyncio
+    async def test_fetch_text_no_plain_format_raises_value_error(self, monkeypatch):
+        from services import gutenberg
+
+        class _FakeAsyncClient:
+            def __init__(self, *args, **kwargs): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): return False
+            async def get(self, url):
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.json.return_value = {"formats": {}}
+                return resp
+
+        monkeypatch.setattr(gutenberg.httpx, "AsyncClient", _FakeAsyncClient)
+        with pytest.raises(ValueError, match="No plain text format"):
+            await gutenberg.fetch_text(139)
