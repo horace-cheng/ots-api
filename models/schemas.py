@@ -400,6 +400,17 @@ class ErrorResponse(BaseModel):
     detail: str
 
 
+# ── Gutenberg ────────────────────────────────────────────────────────────────
+class GutenbergBookInfo(BaseModel):
+    book_id:      int
+    title:        str
+    authors:      List[str]
+    language:     str
+    word_count:   int
+    num_chapters: int
+    num_chunks:   int
+
+
 # ── Language Configs ────────────────────────────────────────────────────────
 class LanguageConfigResponse(BaseModel):
     id:               int

@@ -34,12 +34,14 @@ from models.schemas import (
     SupportFileResponse, SupportFileListResponse,
     TokenUsageResponse, TokenUsageItem,
     TokenUsageDetailResponse, TokenUsageDetailItem,
+    GutenbergBookInfo,
 )
 from services.payment import (
     get_payment_gateway, InvoiceRequest, InvoiceType, InvoiceError
 )
 from services.pipeline import trigger_pipeline, trigger_deliver_job
 from services.notification import publish_event_sync, EventType
+from services import gutenberg as gutenberg_svc
 from services.translation_versions import (
     save_translation_version as svc_save_version,
     list_versions as svc_list_versions,
@@ -52,6 +54,25 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 # ── Gutenberg Import ──────────────────────────────────────────────────────
+@router.get("/gutenberg/{book_id}", response_model=GutenbergBookInfo)
+async def preview_gutenberg_book(
+    book_id: int,
+    admin: dict              = Depends(get_admin_user),
+):
+    """
+    Fetch book metadata from Gutendex and return a preview payload
+    (title, authors, language, word_count, num_chapters, num_chunks).
+    Does NOT create an order; use POST /admin/gutenberg/{book_id} to start.
+    """
+    try:
+        return await gutenberg_svc.preview_book(book_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to preview Gutenberg book {book_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Failed to fetch from Gutendex: {e}")
+
+
 @router.post("/gutenberg/{book_id}", response_model=MessageResponse)
 async def import_gutenberg_book(
     book_id: int,
