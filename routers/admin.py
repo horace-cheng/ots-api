@@ -26,6 +26,7 @@ from models.schemas import (
     AssignmentUpdate, AssignmentResponse, AssignmentListResponse,
     AssignmentAction, AssignmentComplete,
     PaymentConfirm, MessageResponse, QuoteUpdate,
+    GutenbergImportResponse,
     OrderDetail, AdminOrderDetail, OrderListResponse,
     DownloadUrlResponse, OriginalContentResponse,
     UserListItem, UserListResponse, UserUpdateRequest, UserLanguageUpdate, UserLanguage,
@@ -73,7 +74,7 @@ async def preview_gutenberg_book(
         raise HTTPException(status_code=502, detail=f"Failed to fetch from Gutendex: {e}")
 
 
-@router.post("/gutenberg/{book_id}", response_model=MessageResponse)
+@router.post("/gutenberg/{book_id}", response_model=GutenbergImportResponse)
 async def import_gutenberg_book(
     book_id: int,
     admin: dict              = Depends(get_admin_user),
@@ -129,7 +130,10 @@ async def import_gutenberg_book(
 
     await trigger_pipeline(order_id)
 
-    return MessageResponse(message=f"Gutenberg book {book_id} import triggered. Order ID: {order_id}")
+    return GutenbergImportResponse(
+        order_id=order_id,
+        message=f"Gutenberg book {book_id} import triggered. Order ID: {order_id}",
+    )
 
 
 # ── QA Flags ──────────────────────────────────────────────────────────────────

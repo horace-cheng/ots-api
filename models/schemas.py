@@ -411,6 +411,11 @@ class GutenbergBookInfo(BaseModel):
     num_chunks:   int
 
 
+class GutenbergImportResponse(BaseModel):
+    order_id: str
+    message:  str
+
+
 # ── Language Configs ────────────────────────────────────────────────────────
 class LanguageConfigResponse(BaseModel):
     id:               int

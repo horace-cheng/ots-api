@@ -45,8 +45,10 @@ class TestImportGutenbergBook:
             resp = admin_client.post("/admin/gutenberg/1342")
 
         assert resp.status_code == 200
-        assert "Gutenberg book 1342 import triggered" in resp.json()["message"]
-        assert order_id in resp.json()["message"]
+        body = resp.json()
+        assert "Gutenberg book 1342 import triggered" in body["message"]
+        assert order_id in body["message"]
+        assert body["order_id"] == order_id
         mock_preview.assert_awaited_once_with(1342)
         mock_trigger.assert_awaited_once_with(order_id)
 
