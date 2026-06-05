@@ -18,7 +18,7 @@ CHAPTER_RE = re.compile(r'(CHAPTER\s+[IVXLCDM\d]+(?:\..*?\n.*?))', re.IGNORECASE
 
 async def fetch_metadata(book_id: int) -> dict:
     """Fetch book metadata (title, authors, language) from Gutendex."""
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         response = await client.get(f"{GUTENDEX_API}/{book_id}")
         if response.status_code == 404:
             raise ValueError(f"Gutenberg book {book_id} not found")
@@ -34,7 +34,7 @@ async def fetch_metadata(book_id: int) -> dict:
 
 async def fetch_text(book_id: int) -> str:
     """Fetch the plain-text body of a Gutenberg book via Gutendex."""
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
         meta_resp = await client.get(f"{GUTENDEX_API}/{book_id}")
         meta_resp.raise_for_status()
         data = meta_resp.json()
