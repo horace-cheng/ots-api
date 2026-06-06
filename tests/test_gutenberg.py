@@ -163,6 +163,48 @@ class TestTextFallback:
         chunks = split_text_structured(text)
         assert len(chunks) == 2
 
+    def test_split_bare_roman_numerals_time_machine_style(self):
+        """Regression for Gutenberg #35 (The Time Machine) which uses bare
+        Roman numerals (I., II., …, XVI.) without the word "CHAPTER".
+        Previously produced 387 chunks because paragraph-split counted the
+        entire Gutenberg license header."""
+        from services.gutenberg import split_text_structured
+        text = (
+            "*** START OF THE PROJECT GUTENBERG EBOOK THE TIME MACHINE ***\n"
+            "                          EBOOK THE TIME MACHINE ***\n"
+            "                          CONTENTS\n"
+            " I. Introduction\n II. The Machine\n III. Time Traveller Returns\n"
+            "\n"
+            " I.\n\nIntroduction\n\nThe Time Traveller was expounding.\n\n"
+            " II.\n\nThe Machine\n\nHe held a framework.\n\n"
+            " III.\n\nTime Traveller Returns\n\nHe returned pale.\n\n"
+            " Epilogue\n\nOne cannot choose but wonder.\n"
+            "*** END OF THE PROJECT GUTENBERG EBOOK THE TIME MACHINE ***\n"
+        )
+        chunks = split_text_structured(text)
+        # title/TOC + 3 chapters + epilogue = 5 (NOT 387 paragraphs).
+        assert len(chunks) == 5, f"expected 5 chunks, got {len(chunks)}"
+        assert any("The Time Traveller was expounding" in c for c in chunks)
+        assert any("One cannot choose but wonder" in c for c in chunks)
+
+    def test_split_strips_gutenberg_license_boilerplate(self):
+        """License preamble and postamble must not be counted as chunks."""
+        from services.gutenberg import split_text_structured
+        text = (
+            "Long license preamble.\n" * 50
+            + "*** START OF THE PROJECT GUTENBERG EBOOK FOO ***\n"
+            + "*** EBOOK FOO ***\n"
+            + "CHAPTER I\n\nBody of chapter one.\n\n"
+            + "CHAPTER II\n\nBody of chapter two.\n"
+            + "*** END OF THE PROJECT GUTENBERG EBOOK FOO ***\n"
+            + "Long license postamble.\n" * 50
+        )
+        chunks = split_text_structured(text)
+        # Only the 2 chapter bodies — license text is stripped.
+        assert len(chunks) == 2
+        assert "Body of chapter one" in chunks[0]
+        assert "Body of chapter two" in chunks[1]
+
     def test_parse_header_metadata_extracts_title_author_language(self):
         from services.gutenberg import parse_header_metadata
         text = (
@@ -595,10 +637,10 @@ class TestFetchBook:
 
         assert book["title"] == "Fallback Book"
         assert book["authors"] == ["Some Author"]
-        # 3 chunks: [pre-chapter, chapter 1 body, chapter 2 body]
-        assert len(book["chapters"]) == 3
-        assert "First body" in book["chapters"][1]["text"]
-        assert "Second body" in book["chapters"][2]["text"]
+        # 2 chunks: license header is stripped, leaving the 2 chapter bodies.
+        assert len(book["chapters"]) == 2
+        assert "First body" in book["chapters"][0]["text"]
+        assert "Second body" in book["chapters"][1]["text"]
 
     @pytest.mark.asyncio
     async def test_falls_back_to_text_when_epub_parse_fails(self, monkeypatch):
@@ -619,9 +661,9 @@ class TestFetchBook:
                 book = await gutenberg.fetch_book(1)
 
         assert book["title"] == "Corrupted"
-        # 2 chunks: [pre-chapter, chapter body]
-        assert len(book["chapters"]) == 2
-        assert "Only chapter" in book["chapters"][1]["text"]
+        # 1 chunk: license header is stripped, only the chapter body remains.
+        assert len(book["chapters"]) == 1
+        assert "Only chapter" in book["chapters"][0]["text"]
 
 
 # ── preview_book (top-level public API) ────────────────────────────────────

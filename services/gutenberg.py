@@ -39,9 +39,27 @@ CHAPTER_RE = re.compile(
     r'^[ \t]*CHAPTER[ \t]+[IVXLCDM\d]+[^\n]*$',
     re.IGNORECASE | re.MULTILINE,
 )
+# Bare Roman-numeral chapter markers: "I.", "II.", "XII. The Golden Age",
+# "EPILOGUE". Used for books like H. G. Wells' "The Time Machine" (Gutenberg
+# #35) which use Roman numerals without the word "CHAPTER". Caps at 50 (L) to
+# avoid matching Roman numerals in body text. The line must contain ONLY the
+# marker (and optional title) — nothing should precede the marker.
+# Also matches PROLOGUE / EPILOGUE / CONCLUSION on their own line.
+ROMAN_CHAPTER_RE = re.compile(
+    r'^[ \t]*(?:'
+    r'(?:I{1,3}|IV|VI{0,3}|IX|X|XI{0,3}|XIV|XV|XVI{0,3}|XIX|XX|XXI{0,3}|'
+    r'XXIV|XXV|XXVI{0,3}|XXIX|XXX|XXXI{0,3}|XXXIV|XXXV|XXXVI{0,3}|XXXIX|XL|XLI{0,3}?|'
+    r'XLIV|XLV|XLVI{0,3}|XLIX|L)(?:[.:][^\n\r]*)?'
+    r'|PROLOGUE|EPILOGUE|CONCLUSION'
+    r')[ \t\r]*$',
+    re.IGNORECASE | re.MULTILINE,
+)
 META_RE     = re.compile(r'^(Title|Author|Language)\s*:\s*(.+?)\s*$', re.MULTILINE)
 START_MARKER = re.compile(
     r'\*\*\*\s*START OF (THE|THIS) PROJECT GUTENBERG', re.IGNORECASE
+)
+END_MARKER = re.compile(
+    r'\*\*\*\s*END OF (THE|THIS) PROJECT GUTENBERG', re.IGNORECASE
 )
 LANG_NAME_TO_CODE = {
     "english":  "en", "french":  "fr", "german":   "de", "spanish":  "es",
@@ -154,11 +172,58 @@ def parse_header_metadata(text: str, fallback_book_id: int = 0) -> dict:
     }
 
 
+def _strip_gutenberg_boilerplate(text: str) -> str:
+    """Strip the Project Gutenberg license header and footer.
+
+    Gutenberg text files contain a license header (before ``*** START OF ...``)
+    and a license footer (after ``*** END OF ...``). Lines like
+    `` EBOOK <TITLE> ***`` or ``*** EBOOK <TITLE> ***`` that follow the
+    START marker are also Gutenberg boilerplate. If no markers are present,
+    return unchanged.
+    """
+    start = START_MARKER.search(text)
+    if start:
+        text = text[start.end():]
+        # Strip lines that contain "EBOOK ... ***" near the top of the body.
+        # These appear 1-2 lines after the START marker and are boilerplate.
+        for _ in range(3):
+            new_text = re.sub(
+                r'^[ \t]*[^\n]*EBOOK[^\n]*\*\*\*[ \t]*\n+',
+                '',
+                text,
+                count=1,
+            )
+            if new_text == text:
+                break
+            text = new_text
+    end = END_MARKER.search(text)
+    if end:
+        text = text[: end.start()]
+    return text.strip()
+
+
 def split_text_structured(text: str) -> List[str]:
-    """Split text into structural chunks. Priority: chapters -> paragraphs -> sentences."""
+    """Split text into structural chunks. Priority: chapters -> Roman -> paragraphs -> sentences.
+
+    Mirrors the pipeline's gt_fetcher logic so the admin preview endpoint
+    shows the same chapter counts as the actual translation pipeline.
+    """
+    text = _strip_gutenberg_boilerplate(text)
+
+    # First try explicit "CHAPTER X" pattern.
     chapter_splits = CHAPTER_RE.split(text)
     if len(chapter_splits) > 1:
         return _clean_chunks(chapter_splits)
+
+    # Next try bare Roman-numeral chapter markers ("I.", "II.", "XII. Title",
+    # "EPILOGUE") — used by books like H. G. Wells' "The Time Machine".
+    # Require at least 3 matches to avoid splitting on stray "I." / "II."
+    # lines in body text.
+    roman_matches = ROMAN_CHAPTER_RE.findall(text)
+    if len(roman_matches) >= 3:
+        roman_splits = ROMAN_CHAPTER_RE.split(text)
+        return _clean_chunks(roman_splits)
+
     paragraph_splits = re.split(r'\n\s*\n', text)
     if len(paragraph_splits) > 1:
         return _clean_chunks(paragraph_splits)
