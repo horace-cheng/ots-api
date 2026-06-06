@@ -26,7 +26,7 @@ from models.schemas import (
     QAFlagResponse, QAFlagListResponse, QAFlagResolve,
     AssignmentUpdate, AssignmentResponse, AssignmentListResponse,
     AssignmentAction, AssignmentComplete,
-    PaymentConfirm, MessageResponse, QuoteUpdate,
+    PaymentConfirm, MessageResponse, QuoteUpdate, RerunStageRequest,
     GutenbergImportResponse,
     OrderDetail, AdminOrderDetail, OrderListResponse,
     DownloadUrlResponse, OriginalContentResponse,
@@ -42,7 +42,10 @@ from models.schemas import (
 from services.payment import (
     get_payment_gateway, InvoiceRequest, InvoiceType, InvoiceError
 )
-from services.pipeline import trigger_pipeline, trigger_deliver_job
+from services.pipeline import (
+    trigger_pipeline, trigger_deliver_job, trigger_rerun_stage,
+    RERUN_STAGE_JOBS, RERUN_STAGE_ORDER,
+)
 from services.notification import publish_event_sync, EventType
 from services import gutenberg as gutenberg_svc
 from services.translation_versions import (
@@ -1946,6 +1949,71 @@ async def redeliver(
 
     logger.info(f"Deliver job re-triggered: order={order_id}, track={row.track_type}")
     return MessageResponse(message="Deliver job triggered")
+
+
+@router.post("/orders/{order_id}/rerun-stage", response_model=MessageResponse)
+async def rerun_stage(
+    order_id: str,
+    body:    RerunStageRequest,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """
+    Rerun a specific stage (or all stages) of the Gutenberg pipeline.
+
+    Stages: fetcher, extract_terms, translate, simplify, tailo, deliver, all.
+    Each is a separate Cloud Run Job (ots-gt-*); this endpoint triggers the
+    chosen one(s) directly without going through Cloud Workflows.
+
+    `stage="all"` runs the six stages in order (fetcher → ... → deliver).
+    Stages are fire-and-forget; poll `pipeline_jobs` for completion.
+    """
+    allowed = set(RERUN_STAGE_JOBS) | {"all"}
+    if body.stage not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid stage: {body.stage!r}. "
+                f"Must be one of: {', '.join(sorted(allowed))}."
+            ),
+        )
+
+    result = await db.execute(
+        text("SELECT id, track_type FROM orders WHERE id = :id"),
+        {"id": order_id},
+    )
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if row.track_type != "gutenberg":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"rerun-stage is for Gutenberg orders only; "
+                f"this order is {row.track_type!r}"
+            ),
+        )
+
+    try:
+        triggered = await trigger_rerun_stage(order_id, body.stage)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to trigger rerun-stage: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    stages_run = (
+        "all ({} stages)".format(len(RERUN_STAGE_ORDER))
+        if body.stage == "all"
+        else body.stage
+    )
+    logger.info(
+        f"Rerun-stage triggered by admin: order={order_id}, "
+        f"stage={stages_run}, jobs=[{triggered}]"
+    )
+    return MessageResponse(
+        message=f"Stage(s) triggered: {stages_run}. Jobs: {triggered}."
+    )
 
 
 @router.put("/users/{user_id}/languages", response_model=MessageResponse)

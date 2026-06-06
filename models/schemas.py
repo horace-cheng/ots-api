@@ -400,6 +400,17 @@ class ErrorResponse(BaseModel):
     detail: str
 
 
+# ── Stage-level rerun ───────────────────────────────────────────────────────
+class RerunStageRequest(BaseModel):
+    stage: str = Field(
+        ...,
+        description=(
+            "Pipeline stage to rerun. One of: fetcher, extract_terms, "
+            "translate, simplify, tailo, deliver, all."
+        ),
+    )
+
+
 # ── Gutenberg ────────────────────────────────────────────────────────────────
 class GutenbergBookInfo(BaseModel):
     book_id:      int

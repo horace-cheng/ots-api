@@ -21,6 +21,25 @@ DELIVER_JOB_NAMES = {
 }
 
 
+# ── Stage-level rerun mapping ─────────────────────────────────────────────────
+# Used by POST /admin/orders/{id}/rerun-stage. Maps an admin-facing
+# `stage` name to the Cloud Run Job that handles it, plus the per-stage
+# extra env vars (e.g. REDELIVER for deliver).
+RERUN_STAGE_JOBS = {
+    "fetcher":       ("ots-gt-fetcher-{env}",       {}),
+    "extract_terms": ("ots-gt-extract-terms-{env}", {}),
+    "translate":     ("ots-gt-translate-{env}",     {}),
+    "simplify":      ("ots-gt-simplify-{env}",      {}),
+    "tailo":         ("ots-gt-tailo-{env}",         {}),
+    "deliver":       ("ots-gt-deliver-{env}",       {"REDELIVER": "true"}),
+}
+
+# Ordered list for `stage="all"` — runs the whole pipeline from scratch.
+RERUN_STAGE_ORDER = [
+    "fetcher", "extract_terms", "translate", "simplify", "tailo", "deliver",
+]
+
+
 @lru_cache(maxsize=1)
 def _get_publisher():
     """Pub/Sub PublisherClient 單例"""
@@ -109,6 +128,83 @@ async def trigger_deliver_job(order_id: str, track_type: str) -> str:
 
     except Exception as e:
         logger.error(f"Failed to trigger deliver job for order {order_id}: {e}")
+        raise
+
+
+async def trigger_rerun_stage(order_id: str, stage: str) -> str:
+    """
+    Trigger a single stage (or all stages in order) of the Gutenberg
+    pipeline as a Cloud Run Job execution. Used by
+    POST /admin/orders/{id}/rerun-stage to let admins recover from a
+    partial pipeline failure without re-running the whole workflow.
+
+    `stage` is one of: fetcher, extract_terms, translate, simplify,
+    tailo, deliver, all.
+
+    Returns the (formatted) job name of the last triggered stage, or
+    comma-separated names for stage="all".
+    """
+    if stage == "all":
+        triggered: list[str] = []
+        for s in RERUN_STAGE_ORDER:
+            job_name, extra_env = RERUN_STAGE_JOBS[s]
+            await _run_cloud_run_job(order_id, job_name, extra_env)
+            triggered.append(job_name.format(env=settings.env))
+        return ",".join(triggered)
+
+    if stage not in RERUN_STAGE_JOBS:
+        raise ValueError(
+            f"Unknown stage: {stage!r}. "
+            f"Must be one of: {', '.join(list(RERUN_STAGE_JOBS) + ['all'])}"
+        )
+
+    job_name, extra_env = RERUN_STAGE_JOBS[stage]
+    await _run_cloud_run_job(order_id, job_name, extra_env)
+    return job_name.format(env=settings.env)
+
+
+async def _run_cloud_run_job(order_id: str, job_template: str, extra_env: dict) -> None:
+    """Fire-and-forget trigger of a Cloud Run Job for one stage.
+
+    Errors are raised so the caller can surface them to the admin.
+    """
+    try:
+        from google.cloud.run_v2 import JobsClient
+        from google.cloud.run_v2.types import RunJobRequest, EnvVar
+
+        full_job_name = job_template.format(env=settings.env)
+        name = (
+            f"projects/{settings.project_id}/locations/"
+            f"{settings.region}/jobs/{full_job_name}"
+        )
+
+        env_vars = [EnvVar(name="ORDER_ID", value=order_id)]
+        for k, v in extra_env.items():
+            env_vars.append(EnvVar(name=k, value=v))
+
+        request = RunJobRequest(
+            name=name,
+            overrides=RunJobRequest.Overrides(
+                container_overrides=[
+                    RunJobRequest.Overrides.ContainerOverride(env=env_vars)
+                ]
+            ),
+        )
+
+        loop = asyncio.get_event_loop()
+        client = JobsClient()
+        await loop.run_in_executor(
+            None, lambda: client.run_job(request=request)
+        )
+        logger.info(
+            f"Rerun stage triggered: order={order_id}, job={full_job_name}, "
+            f"extra_env={list(extra_env)}"
+        )
+
+    except Exception as e:
+        logger.error(
+            f"Failed to trigger rerun stage for order {order_id}: {e}"
+        )
         raise
 
 
