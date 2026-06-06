@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 import json
 import logging
+from typing import Optional
 
 from core.database import get_db
 from core import storage
@@ -36,6 +37,7 @@ from models.schemas import (
     TokenUsageResponse, TokenUsageItem,
     TokenUsageDetailResponse, TokenUsageDetailItem,
     GutenbergBookInfo,
+    GutenbergChapterItem, GutenbergChapterSegment, GutenbergChaptersResponse,
 )
 from services.payment import (
     get_payment_gateway, InvoiceRequest, InvoiceType, InvoiceError
@@ -836,7 +838,7 @@ async def admin_get_plain_text_download_url(
     db:   AsyncSession = Depends(get_db),
 ):
     result = await db.execute(text("""
-        SELECT o.gcs_output_path, o.gcs_plain_text_output_path FROM orders o WHERE o.id = :order_id
+        SELECT o.gcs_output_path, o.gcs_plain_text_output_path FROM orders o WHERE id = :order_id
     """), {"order_id": order_id})
     row = result.fetchone()
     if not row:
@@ -850,6 +852,252 @@ async def admin_get_plain_text_download_url(
 
     signed_url = generate_download_signed_url(gcs_path)
     return DownloadUrlResponse(signed_url=signed_url, expires_in=3600)
+
+
+# ── Admin: Gutenberg Track Download URLs ───────────────────────────────────
+# The Gutenberg track produces six output artifacts in the orders/{id}/
+# prefix; the frontend picks one via the ``version`` query param. The
+# canonical mapping is:
+#
+#   standard    → full_translation.txt    (Traditional Chinese)
+#   youth       → full_simplified.txt     (youth-friendly)
+#   tailo       → full_tailo.txt          (Hanzi + Tai-lo)
+#   sxc         → source_vs_chinese.html  (原文 ↔ 標準翻譯)
+#   yvt         → youth_vs_tailo.html     (青少年版 ↔ 台羅版)
+#   comparison  → book_comparison.html    (4-column overview)
+GUTENBERG_FILE_MAP = {
+    "standard":   "full_translation.txt",
+    "youth":      "full_simplified.txt",
+    "tailo":      "full_tailo.txt",
+    "sxc":        "source_vs_chinese.html",
+    "yvt":        "youth_vs_tailo.html",
+    "comparison": "book_comparison.html",
+}
+
+
+@router.get("/gutenberg/{order_id}/download-url", response_model=DownloadUrlResponse)
+async def admin_get_gutenberg_download_url(
+    order_id: str,
+    version: str = "standard",
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Generate a signed URL for a Gutenberg-track output artifact.
+
+    The ``version`` query param selects which of the six output files to
+    point at; the mapping is centralised in ``GUTENBERG_FILE_MAP``.
+
+    This endpoint replaces the previous 404 — it was added as part of the
+    v2 segment-based rewrite (see change_logs/2026-06-05_gutenberg_v2_*).
+    """
+    if version not in GUTENBERG_FILE_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown version {version!r}. "
+                   f"Valid: {sorted(GUTENBERG_FILE_MAP.keys())}",
+        )
+
+    result = await db.execute(
+        text("SELECT o.track_type FROM orders o WHERE o.id = :order_id"),
+        {"order_id": order_id},
+    )
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if row.track_type != "gutenberg":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order {order_id} is not a Gutenberg order (track_type={row.track_type!r})",
+        )
+
+    filename = GUTENBERG_FILE_MAP[version]
+    bucket_name = settings.gcs_outputs_bucket
+    gcs_path = f"gs://{bucket_name}/orders/{order_id}/{filename}"
+
+    client = storage.get_storage_client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(f"orders/{order_id}/{filename}")
+    if not blob.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Gutenberg output {filename!r} not found for order {order_id} "
+                   f"(deliver step may not have run yet)",
+        )
+
+    signed_url = generate_download_signed_url(gcs_path)
+    return DownloadUrlResponse(signed_url=signed_url, expires_in=3600)
+
+
+# ── Admin: Gutenberg Track Chapter Navigation ─────────────────────────────
+# The v2 segment-based pipeline writes the following artifacts to the temp
+# bucket (gcs_temp_bucket) under ``pipeline/{ORDER_ID}/``:
+#
+#   source/chapters.json   — chapter index with segment_start/segment_end
+#   translated.json        — consolidated translations
+#   simplified.json        — youth-friendly version
+#   tailo.json             — Hanzi + Tai-lo pronunciation
+#   metadata.json          — book-level info (incl. source_filename)
+#
+# This endpoint powers chapter-by-chapter viewing in the admin UI. By
+# default it returns the chapter index only; ``?chapter=N`` returns the
+# segments for that chapter (one HTTP round-trip per chapter — keeps each
+# response small even for 100+ chapter books).
+def _load_gutenberg_chapters_index(order_id: str) -> list[dict]:
+    """Read ``pipeline/{order_id}/source/chapters.json`` from the temp bucket."""
+    chapters = read_blob_as_json_or_none(
+        f"pipeline/{order_id}/source/chapters.json"
+    )
+    if not isinstance(chapters, list):
+        raise HTTPException(
+            status_code=404,
+            detail=f"chapters.json not found or malformed for order {order_id} "
+                   f"(v2 pipeline may not have run for this order yet)",
+        )
+    return chapters
+
+
+def _load_gutenberg_metadata(order_id: str) -> dict:
+    """Read ``pipeline/{order_id}/metadata.json`` from the temp bucket."""
+    return read_blob_as_json_or_none(f"pipeline/{order_id}/metadata.json") or {}
+
+
+def _load_gutenberg_segments_json(order_id: str, filename: str) -> list[dict]:
+    """Read one of the consolidated segment JSONs; returns [] if missing."""
+    if filename not in ("translated.json", "simplified.json", "tailo.json"):
+        raise ValueError(f"Unsafe filename {filename!r}")
+    return read_blob_as_json_or_none(f"pipeline/{order_id}/{filename}") or []
+
+
+def read_blob_as_json_or_none(gcs_path: str):
+    """Helper: read a GCS blob as JSON, returning None if missing."""
+    client = storage.get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+    blob = bucket.blob(gcs_path)
+    if not blob.exists():
+        return None
+    raw = blob.download_as_text(encoding="utf-8")
+    return json.loads(raw)
+
+
+@router.get("/gutenberg/{order_id}/chapters", response_model=GutenbergChaptersResponse)
+async def admin_get_gutenberg_chapters(
+    order_id: str,
+    chapter: Optional[int] = Query(
+        None,
+        ge=0,
+        description="If set, return the segments for this chapter index "
+                    "in addition to the chapter index list.",
+    ),
+    version: str = Query(
+        "all",
+        description="When ?chapter=N is set, controls which translation "
+                    "versions to include: 'all' returns source+translated+"
+                    "simplified+tailo; any of 'standard', 'youth', 'tailo', "
+                    "'sxc', 'yvt', 'comparison' returns the matching pair.",
+    ),
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Return the chapter index for a Gutenberg order; optionally with one
+    chapter's segments included.
+
+    The chapter index is cheap to load (it's a small JSON file in the temp
+    bucket), so the default response contains only the index. When the
+    caller passes ``?chapter=N`` the segments for that chapter are loaded
+    from the three consolidated JSONs and returned alongside the index.
+
+    Use this for chapter-by-chapter navigation in the admin viewer; the
+    full-book HTML is still available via ``/download-url?version=sxc``
+    for users who want a single scrolling view.
+    """
+    if chapter is not None and version not in (
+        "all", "standard", "youth", "tailo", "sxc", "yvt", "comparison",
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown version {version!r}. Valid: all|standard|youth|tailo|sxc|yvt|comparison",
+        )
+
+    result = await db.execute(
+        text("SELECT o.track_type FROM orders o WHERE o.id = :order_id"),
+        {"order_id": order_id},
+    )
+    row = result.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if row.track_type != "gutenberg":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order {order_id} is not a Gutenberg order (track_type={row.track_type!r})",
+        )
+
+    raw_chapters = _load_gutenberg_chapters_index(order_id)
+    metadata     = _load_gutenberg_metadata(order_id)
+    chapters     = [
+        GutenbergChapterItem(
+            index=c.get("index", i),
+            title=c.get("title", f"Chapter {i}"),
+            segment_start=c.get("segment_start", 0),
+            segment_end=c.get("segment_end", 0),
+            segment_count=max(0, c.get("segment_end", 0) - c.get("segment_start", 0)),
+            char_count=c.get("char_count", 0),
+        )
+        for i, c in enumerate(raw_chapters)
+    ]
+    total_segments = sum(ch.segment_count for ch in chapters)
+    source_filename = metadata.get("source_filename") or metadata.get("title")
+
+    response = GutenbergChaptersResponse(
+        chapters=chapters,
+        source_filename=source_filename,
+        total_segments=total_segments,
+    )
+
+    if chapter is None:
+        return response
+
+    target = next((c for c in chapters if c.index == chapter), None)
+    if target is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Chapter {chapter} not found (valid range: 0..{len(chapters) - 1})",
+        )
+
+    translated = _load_gutenberg_segments_json(order_id, "translated.json")
+    simplified = _load_gutenberg_segments_json(order_id, "simplified.json")
+    tailo      = _load_gutenberg_segments_json(order_id, "tailo.json")
+
+    by_index_tr: dict[int, str] = {s.get("index", -1): s.get("translated", "") for s in translated}
+    by_index_sm: dict[int, str] = {s.get("index", -1): s.get("translated", "") for s in simplified}
+    by_index_to: dict[int, str] = {s.get("index", -1): s.get("translated", "") for s in tailo}
+
+    segments: list[GutenbergChapterSegment] = []
+    for seg in translated:
+        idx = seg.get("index", -1)
+        if idx < target.segment_start or idx >= target.segment_end:
+            continue
+        seg_obj = GutenbergChapterSegment(
+            index=idx,
+            chapter_index=target.index,
+            chapter_title=target.title,
+            source=seg.get("source", ""),
+        )
+        if version == "all":
+            seg_obj.translated = by_index_tr.get(idx, "")
+            seg_obj.simplified = by_index_sm.get(idx, "")
+            seg_obj.tailo      = by_index_to.get(idx, "")
+        elif version in ("standard", "sxc"):
+            seg_obj.translated = by_index_tr.get(idx, "")
+        elif version in ("youth", "yvt"):
+            seg_obj.translated = by_index_sm.get(idx, "")
+        elif version in ("tailo", "comparison"):
+            seg_obj.tailo = by_index_to.get(idx, "")
+        segments.append(seg_obj)
+
+    response.selected_chapter = target
+    response.segments = segments
+    response.version = version
+    return response
 
 
 # ── Admin: Pipeline Progress ─────────────────────────────────────────────────

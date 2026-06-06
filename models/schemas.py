@@ -416,6 +416,34 @@ class GutenbergImportResponse(BaseModel):
     message:  str
 
 
+class GutenbergChapterItem(BaseModel):
+    index:          int
+    title:          str
+    segment_start:  int
+    segment_end:    int
+    segment_count:  int
+    char_count:     int
+
+
+class GutenbergChapterSegment(BaseModel):
+    index:          int
+    chapter_index:  int
+    chapter_title:  str
+    source:         str
+    translated:     str = ""
+    simplified:     str = ""
+    tailo:          str = ""
+
+
+class GutenbergChaptersResponse(BaseModel):
+    chapters:        List[GutenbergChapterItem]
+    source_filename: Optional[str] = None
+    total_segments:  int = 0
+    selected_chapter: Optional[GutenbergChapterItem] = None
+    segments:         List[GutenbergChapterSegment] = []
+    version:          Optional[str] = None
+
+
 # ── Language Configs ────────────────────────────────────────────────────────
 class LanguageConfigResponse(BaseModel):
     id:               int

@@ -67,6 +67,126 @@ class TestImportGutenbergBook:
         assert resp.status_code == 500
         assert "no matching users row" in resp.json()["detail"]
 
+
+# ── Gutenberg download URL endpoint ───────────────────────────────────────
+
+class TestGutenbergDownloadUrl:
+    """v2 added a dedicated signed-URL endpoint for the six Gutenberg output
+    artifacts (full_translation.txt, full_simplified.txt, full_tailo.txt,
+    source_vs_chinese.html, youth_vs_tailo.html, book_comparison.html)."""
+
+    def _order_row(self, track_type="gutenberg"):
+        row = MagicMock()
+        row.track_type = track_type
+        return row
+
+    def test_standard_version_returns_signed_url(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._order_row()
+        with patch("routers.admin.storage.get_storage_client") as mock_client, \
+             patch("routers.admin.generate_download_signed_url", return_value="https://signed.example/x") as mock_gen:
+            fake_bucket = MagicMock()
+            fake_blob = MagicMock()
+            fake_blob.exists.return_value = True
+            fake_bucket.blob.return_value = fake_blob
+            mock_client.return_value.bucket.return_value = fake_bucket
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/download-url?version=standard")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["signed_url"] == "https://signed.example/x"
+        mock_gen.assert_called_once()
+        called_path = mock_gen.call_args[0][0]
+        assert "full_translation.txt" in called_path
+        assert "ORDER-001" in called_path
+
+    def test_youth_version_returns_simplified_path(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._order_row()
+        with patch("routers.admin.storage.get_storage_client"), \
+             patch("routers.admin.generate_download_signed_url", return_value="https://signed/y") as mock_gen:
+            fake_bucket = MagicMock()
+            fake_blob = MagicMock(); fake_blob.exists.return_value = True
+            fake_bucket.blob.return_value = fake_blob
+            with patch("routers.admin.storage.get_storage_client") as mc:
+                mc.return_value.bucket.return_value = fake_bucket
+                resp = admin_client.get("/admin/gutenberg/ORDER-001/download-url?version=youth")
+        assert resp.status_code == 200
+        assert "full_simplified.txt" in mock_gen.call_args[0][0]
+
+    def test_tailo_version_returns_tailo_path(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._order_row()
+        with patch("routers.admin.storage.get_storage_client") as mc, \
+             patch("routers.admin.generate_download_signed_url", return_value="https://signed/t") as mock_gen:
+            fake_bucket = MagicMock()
+            fake_blob = MagicMock(); fake_blob.exists.return_value = True
+            fake_bucket.blob.return_value = fake_blob
+            mc.return_value.bucket.return_value = fake_bucket
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/download-url?version=tailo")
+        assert resp.status_code == 200
+        assert "full_tailo.txt" in mock_gen.call_args[0][0]
+
+    def test_sxc_version_returns_source_vs_chinese_html(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._order_row()
+        with patch("routers.admin.storage.get_storage_client") as mc, \
+             patch("routers.admin.generate_download_signed_url", return_value="https://signed/sxc") as mock_gen:
+            fake_bucket = MagicMock()
+            fake_blob = MagicMock(); fake_blob.exists.return_value = True
+            fake_bucket.blob.return_value = fake_blob
+            mc.return_value.bucket.return_value = fake_bucket
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/download-url?version=sxc")
+        assert resp.status_code == 200
+        assert "source_vs_chinese.html" in mock_gen.call_args[0][0]
+
+    def test_yvt_version_returns_youth_vs_tailo_html(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._order_row()
+        with patch("routers.admin.storage.get_storage_client") as mc, \
+             patch("routers.admin.generate_download_signed_url", return_value="https://signed/yvt") as mock_gen:
+            fake_bucket = MagicMock()
+            fake_blob = MagicMock(); fake_blob.exists.return_value = True
+            fake_bucket.blob.return_value = fake_blob
+            mc.return_value.bucket.return_value = fake_bucket
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/download-url?version=yvt")
+        assert resp.status_code == 200
+        assert "youth_vs_tailo.html" in mock_gen.call_args[0][0]
+
+    def test_comparison_version_returns_book_comparison_html(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._order_row()
+        with patch("routers.admin.storage.get_storage_client") as mc, \
+             patch("routers.admin.generate_download_signed_url", return_value="https://signed/cmp") as mock_gen:
+            fake_bucket = MagicMock()
+            fake_blob = MagicMock(); fake_blob.exists.return_value = True
+            fake_bucket.blob.return_value = fake_blob
+            mc.return_value.bucket.return_value = fake_bucket
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/download-url?version=comparison")
+        assert resp.status_code == 200
+        assert "book_comparison.html" in mock_gen.call_args[0][0]
+
+    def test_unknown_version_returns_400(self, admin_client, mock_db):
+        resp = admin_client.get("/admin/gutenberg/ORDER-001/download-url?version=bogus")
+        assert resp.status_code == 400
+        assert "Unknown version" in resp.json()["detail"]
+
+    def test_order_not_found_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+        resp = admin_client.get("/admin/gutenberg/NONEXIST/download-url?version=standard")
+        assert resp.status_code == 404
+
+    def test_non_gutenberg_order_returns_400(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._order_row(track_type="fast")
+        resp = admin_client.get("/admin/gutenberg/ORDER-001/download-url?version=standard")
+        assert resp.status_code == 400
+        assert "not a Gutenberg order" in resp.json()["detail"]
+
+    def test_missing_output_file_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._order_row()
+        with patch("routers.admin.storage.get_storage_client") as mc:
+            fake_bucket = MagicMock()
+            fake_blob = MagicMock()
+            fake_blob.exists.return_value = False
+            fake_bucket.blob.return_value = fake_blob
+            mc.return_value.bucket.return_value = fake_bucket
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/download-url?version=standard")
+        assert resp.status_code == 404
+        assert "deliver step may not have run" in resp.json()["detail"]
+
 def admin_client(mock_db):
     app = FastAPI()
     app.include_router(router)
@@ -1714,3 +1834,232 @@ class TestTranslationVersions:
                 params={"against": "11111111-1111-1111-1111-111111111999"},
             )
         assert resp.status_code == 404
+
+
+class TestGutenbergChapters:
+    """Chapter-by-chapter navigation endpoint for Gutenberg orders.
+
+    The endpoint reads ``pipeline/{order_id}/source/chapters.json`` and the
+    three consolidated segment JSONs (``translated.json``, ``simplified.json``,
+    ``tailo.json``) from the temp bucket. With ``?chapter=N`` it returns the
+    segments for that chapter; without it, only the chapter index.
+    """
+
+    def _gutenberg_row(self):
+        row = MagicMock()
+        row.track_type = "gutenberg"
+        return row
+
+    def _non_gutenberg_row(self):
+        row = MagicMock()
+        row.track_type = "fast"
+        return row
+
+    CHAPTERS_JSON = [
+        {"index": 0, "title": "Chapter I.",   "segment_start": 0, "segment_end": 4, "char_count": 1800},
+        {"index": 1, "title": "Chapter II.",  "segment_start": 4, "segment_end": 9, "char_count": 2200},
+        {"index": 2, "title": "Chapter III.", "segment_start": 9, "segment_end": 12, "char_count": 1400},
+    ]
+
+    METADATA = {"source_filename": "pride_and_prejudice.txt", "num_chapters": 3, "num_segments": 12}
+
+    TRANSLATED = [
+        {"index": 0,  "source": "It is a truth...",          "translated": "這是一個眾所周知...", "chapter_index": 0, "chapter_title": "Chapter I."},
+        {"index": 1,  "source": "that a single man...",      "translated": "凡有錢的單身漢...",     "chapter_index": 0, "chapter_title": "Chapter I."},
+        {"index": 2,  "source": "in want of a wife...",      "translated": "總想娶位太太...",       "chapter_index": 0, "chapter_title": "Chapter I."},
+        {"index": 3,  "source": "must be in want...",        "translated": "這也難怪...",           "chapter_index": 0, "chapter_title": "Chapter I."},
+        {"index": 4,  "source": "Mr. Bennet...",             "translated": "班納特先生...",         "chapter_index": 1, "chapter_title": "Chapter II."},
+        {"index": 5,  "source": "among the first...",        "translated": "他也是...",             "chapter_index": 1, "chapter_title": "Chapter II."},
+        {"index": 8,  "source": "His eldest daughters...",   "translated": "他的幾個大女兒...",     "chapter_index": 1, "chapter_title": "Chapter II."},
+        {"index": 11, "source": "The question is...",        "translated": "問題是...",             "chapter_index": 2, "chapter_title": "Chapter III."},
+    ]
+
+    SIMPLIFIED = [
+        {"index": 0, "translated": "大家都知道..."},
+        {"index": 4, "translated": "班奈特先生..."},
+        {"index": 11, "translated": "問題是..."},
+    ]
+
+    TAILO = [
+        {"index": 0, "translated": "大家好 (Ta̍k-ke lí-hó)"},
+        {"index": 4, "translated": "班奈特先生 (Pan-na̍t-sian-sin)"},
+        {"index": 11, "translated": "問題 (Būn-tê)"},
+    ]
+
+    def _mock_gcs(self):
+        """Patch GCS client + build a mock blob that returns chapters/metadata/segments by path."""
+        client = MagicMock()
+        bucket = MagicMock()
+        client.bucket.return_value = bucket
+
+        def blob_for(path):
+            blob = MagicMock()
+            blob.exists.return_value = True
+            if path.endswith("source/chapters.json"):
+                blob.download_as_text.return_value = json.dumps(self.CHAPTERS_JSON)
+            elif path.endswith("metadata.json"):
+                blob.download_as_text.return_value = json.dumps(self.METADATA)
+            elif path.endswith("translated.json"):
+                blob.download_as_text.return_value = json.dumps(self.TRANSLATED)
+            elif path.endswith("simplified.json"):
+                blob.download_as_text.return_value = json.dumps(self.SIMPLIFIED)
+            elif path.endswith("tailo.json"):
+                blob.download_as_text.return_value = json.dumps(self.TAILO)
+            else:
+                blob.exists.return_value = False
+            return blob
+        bucket.blob.side_effect = blob_for
+        return client
+
+    def test_index_only_returns_chapter_list(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._gutenberg_row()
+        with patch("routers.admin.storage.get_storage_client", return_value=self._mock_gcs()):
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/chapters")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["source_filename"] == "pride_and_prejudice.txt"
+        assert body["total_segments"] == 12
+        assert body["selected_chapter"] is None
+        assert body["segments"] == []
+        assert body["version"] is None
+        chapters = body["chapters"]
+        assert len(chapters) == 3
+        assert chapters[0]["index"] == 0
+        assert chapters[0]["title"] == "Chapter I."
+        assert chapters[0]["segment_count"] == 4
+        assert chapters[1]["segment_count"] == 5
+        assert chapters[2]["segment_count"] == 3
+
+    def test_chapter_detail_returns_all_versions_by_default(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._gutenberg_row()
+        with patch("routers.admin.storage.get_storage_client", return_value=self._mock_gcs()):
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/chapters?chapter=0")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["selected_chapter"]["index"] == 0
+        assert body["version"] == "all"
+        assert len(body["segments"]) == 4
+        seg0 = body["segments"][0]
+        assert seg0["source"] == "It is a truth..."
+        assert seg0["translated"] == "這是一個眾所周知..."
+        assert seg0["simplified"] == "大家都知道..."
+        assert seg0["tailo"] == "大家好 (Ta̍k-ke lí-hó)"
+
+    def test_chapter_detail_with_youth_version(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._gutenberg_row()
+        with patch("routers.admin.storage.get_storage_client", return_value=self._mock_gcs()):
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/chapters?chapter=0&version=youth")
+        assert resp.status_code == 200
+        body = resp.json()
+        seg0 = body["segments"][0]
+        assert seg0["translated"] == "大家都知道..."
+        assert seg0["simplified"] == ""
+        assert seg0["tailo"] == ""
+
+    def test_chapter_detail_with_sxc_version(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._gutenberg_row()
+        with patch("routers.admin.storage.get_storage_client", return_value=self._mock_gcs()):
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/chapters?chapter=1&version=sxc")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["version"] == "sxc"
+        assert body["selected_chapter"]["index"] == 1
+        for seg in body["segments"]:
+            assert seg["source"]
+            assert seg["translated"]
+        assert {s["index"] for s in body["segments"]} == {4, 5, 8}
+
+    def test_chapter_detail_with_tailo_version(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._gutenberg_row()
+        with patch("routers.admin.storage.get_storage_client", return_value=self._mock_gcs()):
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/chapters?chapter=2&version=tailo")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["segments"][0]["tailo"] == "問題 (Būn-tê)"
+        assert body["segments"][0]["translated"] == ""
+        assert body["segments"][0]["simplified"] == ""
+
+    def test_chapter_not_found_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._gutenberg_row()
+        with patch("routers.admin.storage.get_storage_client", return_value=self._mock_gcs()):
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/chapters?chapter=99")
+        assert resp.status_code == 404
+
+    def test_negative_chapter_index_rejected_by_query(self, admin_client, mock_db):
+        resp = admin_client.get("/admin/gutenberg/ORDER-001/chapters?chapter=-1")
+        assert resp.status_code == 422
+
+    def test_unknown_version_returns_400(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._gutenberg_row()
+        resp = admin_client.get("/admin/gutenberg/ORDER-001/chapters?chapter=0&version=banana")
+        assert resp.status_code == 400
+
+    def test_non_gutenberg_order_rejected(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._non_gutenberg_row()
+        resp = admin_client.get("/admin/gutenberg/ORDER-001/chapters")
+        assert resp.status_code == 400
+        assert "not a Gutenberg" in resp.json()["detail"]
+
+    def test_order_not_found_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+        resp = admin_client.get("/admin/gutenberg/ORDER-MISSING/chapters")
+        assert resp.status_code == 404
+
+    def test_missing_chapters_json_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._gutenberg_row()
+        client = MagicMock()
+        bucket = MagicMock()
+
+        def blob_for(path):
+            blob = MagicMock()
+            blob.exists.return_value = False
+            return blob
+        bucket.blob.side_effect = blob_for
+        client.bucket.return_value = bucket
+        with patch("routers.admin.storage.get_storage_client", return_value=client):
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/chapters")
+        assert resp.status_code == 404
+
+    def test_metadata_source_filename_fallback_to_title(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._gutenberg_row()
+        client = MagicMock()
+        bucket = MagicMock()
+        def blob_for(path):
+            blob = MagicMock()
+            blob.exists.return_value = True
+            if path.endswith("source/chapters.json"):
+                blob.download_as_text.return_value = json.dumps(self.CHAPTERS_JSON)
+            elif path.endswith("metadata.json"):
+                blob.download_as_text.return_value = json.dumps({"title": "Pride and Prejudice"})
+            else:
+                blob.exists.return_value = False
+            return blob
+        bucket.blob.side_effect = blob_for
+        client.bucket.return_value = bucket
+        with patch("routers.admin.storage.get_storage_client", return_value=client):
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/chapters")
+        assert resp.status_code == 200
+        assert resp.json()["source_filename"] == "Pride and Prejudice"
+
+    def test_chapter_with_no_segments_yet_returns_empty_list(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._gutenberg_row()
+        client = MagicMock()
+        bucket = MagicMock()
+        def blob_for(path):
+            blob = MagicMock()
+            blob.exists.return_value = True
+            if path.endswith("source/chapters.json"):
+                blob.download_as_text.return_value = json.dumps(self.CHAPTERS_JSON)
+            elif path.endswith("metadata.json"):
+                blob.download_as_text.return_value = json.dumps(self.METADATA)
+            elif path.endswith("translated.json"):
+                blob.download_as_text.return_value = json.dumps([])
+            else:
+                blob.exists.return_value = False
+            return blob
+        bucket.blob.side_effect = blob_for
+        client.bucket.return_value = bucket
+        with patch("routers.admin.storage.get_storage_client", return_value=client):
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/chapters?chapter=0")
+        assert resp.status_code == 200
+        assert resp.json()["segments"] == []
