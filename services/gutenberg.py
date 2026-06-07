@@ -12,6 +12,15 @@ Fallback: plain text (gutenberg.org/cache/epub/{id}/pg{id}.txt etc.)
   - For books without EPUB, or corrupt NCX
   - Parses PG standard text header for metadata
   - Uses chapter regex on text body
+
+Note: this module's ``parse_epub`` / ``split_text_structured`` are used
+**only** by the admin preview endpoint, which is a synchronous,
+user-triggered request and must not pay for an LLM call.
+
+The production Cloud Run pipeline (ots-pipeline/gt_chapter_splitter)
+uses Gemini to identify chapter boundaries semantically, falling back
+to the regex chain in ``split_text_structured`` if the LLM is
+unavailable. See change_logs/2026-06-07_gt_chapter_splitter.md.
 """
 import asyncio
 import io

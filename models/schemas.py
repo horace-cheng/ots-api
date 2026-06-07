@@ -405,8 +405,8 @@ class RerunStageRequest(BaseModel):
     stage: str = Field(
         ...,
         description=(
-            "Pipeline stage to rerun. One of: fetcher, extract_terms, "
-            "translate, simplify, tailo, deliver, all."
+            "Pipeline stage to rerun. One of: fetcher, chapter_splitter, "
+            "extract_terms, translate, simplify, tailo, deliver, all."
         ),
     )
 

@@ -1961,11 +1961,13 @@ async def rerun_stage(
     """
     Rerun a specific stage (or all stages) of the Gutenberg pipeline.
 
-    Stages: fetcher, extract_terms, translate, simplify, tailo, deliver, all.
-    Each is a separate Cloud Run Job (ots-gt-*); this endpoint triggers the
-    chosen one(s) directly without going through Cloud Workflows.
+    Stages: fetcher, chapter_splitter, extract_terms, translate, simplify,
+    tailo, deliver, all. Each is a separate Cloud Run Job (ots-gt-*); this
+    endpoint triggers the chosen one(s) directly without going through
+    Cloud Workflows.
 
-    `stage="all"` runs the six stages in order (fetcher → ... → deliver).
+    `stage="all"` runs the seven stages in order
+    (fetcher → chapter_splitter → ... → deliver).
     Stages are fire-and-forget; poll `pipeline_jobs` for completion.
     """
     allowed = set(RERUN_STAGE_JOBS) | {"all"}

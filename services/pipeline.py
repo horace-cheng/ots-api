@@ -26,17 +26,19 @@ DELIVER_JOB_NAMES = {
 # `stage` name to the Cloud Run Job that handles it, plus the per-stage
 # extra env vars (e.g. REDELIVER for deliver).
 RERUN_STAGE_JOBS = {
-    "fetcher":       ("ots-gt-fetcher-{env}",       {}),
-    "extract_terms": ("ots-gt-extract-terms-{env}", {}),
-    "translate":     ("ots-gt-translate-{env}",     {}),
-    "simplify":      ("ots-gt-simplify-{env}",      {}),
-    "tailo":         ("ots-gt-tailo-{env}",         {}),
-    "deliver":       ("ots-gt-deliver-{env}",       {"REDELIVER": "true"}),
+    "fetcher":         ("ots-gt-fetcher-{env}",         {}),
+    "chapter_splitter":("ots-gt-chapter-splitter-{env}",{}),
+    "extract_terms":   ("ots-gt-extract-terms-{env}",   {}),
+    "translate":       ("ots-gt-translate-{env}",       {}),
+    "simplify":        ("ots-gt-simplify-{env}",        {}),
+    "tailo":           ("ots-gt-tailo-{env}",           {}),
+    "deliver":         ("ots-gt-deliver-{env}",         {"REDELIVER": "true"}),
 }
 
 # Ordered list for `stage="all"` — runs the whole pipeline from scratch.
 RERUN_STAGE_ORDER = [
-    "fetcher", "extract_terms", "translate", "simplify", "tailo", "deliver",
+    "fetcher", "chapter_splitter", "extract_terms", "translate",
+    "simplify", "tailo", "deliver",
 ]
 
 
@@ -138,8 +140,8 @@ async def trigger_rerun_stage(order_id: str, stage: str) -> str:
     POST /admin/orders/{id}/rerun-stage to let admins recover from a
     partial pipeline failure without re-running the whole workflow.
 
-    `stage` is one of: fetcher, extract_terms, translate, simplify,
-    tailo, deliver, all.
+    `stage` is one of: fetcher, chapter_splitter, extract_terms,
+    translate, simplify, tailo, deliver, all.
 
     Returns the (formatted) job name of the last triggered stage, or
     comma-separated names for stage="all".
