@@ -16,8 +16,9 @@ logger = logging.getLogger(__name__)
 
 # ── Job name mapping ──────────────────────────────────────────────────────────
 DELIVER_JOB_NAMES = {
-    "fast":    "ots-ft-deliver-{env}",
-    "literary": "ots-lt-deliver-{env}",
+    "fast":      "ots-ft-deliver-{env}",
+    "literary":  "ots-lt-deliver-{env}",
+    "gutenberg": "ots-gt-deliver-{env}",
 }
 
 
