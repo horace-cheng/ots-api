@@ -858,23 +858,25 @@ async def admin_get_plain_text_download_url(
 
 
 # ── Admin: Gutenberg Track Download URLs ───────────────────────────────────
-# The Gutenberg track produces six output artifacts in the orders/{id}/
+# The Gutenberg track produces seven output artifacts in the orders/{id}/
 # prefix; the frontend picks one via the ``version`` query param. The
 # canonical mapping is:
 #
-#   standard    → full_translation.txt    (Traditional Chinese)
-#   youth       → full_simplified.txt     (youth-friendly)
-#   tailo       → full_tailo.txt          (Hanzi + Tai-lo)
-#   sxc         → source_vs_chinese.html  (原文 ↔ 標準翻譯)
-#   yvt         → youth_vs_tailo.html     (青少年版 ↔ 台羅版)
-#   comparison  → book_comparison.html    (4-column overview)
+#   standard          → full_translation.txt      (Traditional Chinese)
+#   youth             → full_simplified.txt       (youth-friendly, whole-chapter)
+#   tailo             → full_tailo.txt            (Hanzi + Tai-lo)
+#   sxc               → source_vs_chinese.html    (原文 ↔ 標準翻譯)
+#   simplified_tailo  → simplified_tailo.html     (簡化版 ↔ 台羅版)
+#   simplified_reader → simplified_reader.html    (青少年讀本, single-column)
+#   full_vs_simplified → full_vs_simplified.html  (標準翻譯 vs 青少年版)
 GUTENBERG_FILE_MAP = {
-    "standard":   "full_translation.txt",
-    "youth":      "full_simplified.txt",
-    "tailo":      "full_tailo.txt",
-    "sxc":        "source_vs_chinese.html",
-    "yvt":        "youth_vs_tailo.html",
-    "comparison": "book_comparison.html",
+    "standard":           "full_translation.txt",
+    "youth":              "full_simplified.txt",
+    "tailo":              "full_tailo.txt",
+    "sxc":                "source_vs_chinese.html",
+    "simplified_tailo":   "simplified_tailo.html",
+    "simplified_reader":  "simplified_reader.html",
+    "full_vs_simplified": "full_vs_simplified.html",
 }
 
 
@@ -887,7 +889,7 @@ async def admin_get_gutenberg_download_url(
 ):
     """Generate a signed URL for a Gutenberg-track output artifact.
 
-    The ``version`` query param selects which of the six output files to
+    The ``version`` query param selects which of the seven output files to
     point at; the mapping is centralised in ``GUTENBERG_FILE_MAP``.
 
     This endpoint replaces the previous 404 — it was added as part of the
@@ -996,7 +998,8 @@ async def admin_get_gutenberg_chapters(
         description="When ?chapter=N is set, controls which translation "
                     "versions to include: 'all' returns source+translated+"
                     "simplified+tailo; any of 'standard', 'youth', 'tailo', "
-                    "'sxc', 'yvt', 'comparison' returns the matching pair.",
+                    "'sxc', 'simplified_tailo', 'full_vs_simplified' returns "
+                    "the matching pair.",
     ),
     admin: dict        = Depends(get_admin_user),
     db:   AsyncSession = Depends(get_db),
@@ -1014,11 +1017,13 @@ async def admin_get_gutenberg_chapters(
     for users who want a single scrolling view.
     """
     if chapter is not None and version not in (
-        "all", "standard", "youth", "tailo", "sxc", "yvt", "comparison",
+        "all", "standard", "youth", "tailo", "sxc",
+        "yvt", "comparison",
+        "simplified_tailo", "full_vs_simplified",
     ):
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown version {version!r}. Valid: all|standard|youth|tailo|sxc|yvt|comparison",
+            detail=f"Unknown version {version!r}. Valid: all|standard|youth|tailo|sxc|yvt|comparison|simplified_tailo|full_vs_simplified",
         )
 
     result = await db.execute(
@@ -1089,9 +1094,9 @@ async def admin_get_gutenberg_chapters(
             seg_obj.translated = by_index_tr.get(idx, "")
             seg_obj.simplified = by_index_sm.get(idx, "")
             seg_obj.tailo      = by_index_to.get(idx, "")
-        elif version in ("standard", "sxc"):
+        elif version in ("standard", "sxc", "full_vs_simplified"):
             seg_obj.translated = by_index_tr.get(idx, "")
-        elif version in ("youth", "yvt"):
+        elif version in ("youth", "yvt", "simplified_tailo"):
             seg_obj.translated = by_index_sm.get(idx, "")
         elif version in ("tailo", "comparison"):
             seg_obj.tailo = by_index_to.get(idx, "")

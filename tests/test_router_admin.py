@@ -71,9 +71,10 @@ class TestImportGutenbergBook:
 # ── Gutenberg download URL endpoint ───────────────────────────────────────
 
 class TestGutenbergDownloadUrl:
-    """v2 added a dedicated signed-URL endpoint for the six Gutenberg output
+    """v2 added a dedicated signed-URL endpoint for the seven Gutenberg output
     artifacts (full_translation.txt, full_simplified.txt, full_tailo.txt,
-    source_vs_chinese.html, youth_vs_tailo.html, book_comparison.html)."""
+    source_vs_chinese.html, simplified_tailo.html, simplified_reader.html,
+    full_vs_simplified.html)."""
 
     def _order_row(self, track_type="gutenberg"):
         row = MagicMock()
@@ -135,29 +136,41 @@ class TestGutenbergDownloadUrl:
         assert resp.status_code == 200
         assert "source_vs_chinese.html" in mock_gen.call_args[0][0]
 
-    def test_yvt_version_returns_youth_vs_tailo_html(self, admin_client, mock_db):
+    def test_simplified_tailo_version_returns_simplified_tailo_html(self, admin_client, mock_db):
         mock_db.execute.return_value.fetchone.return_value = self._order_row()
         with patch("routers.admin.storage.get_storage_client") as mc, \
-             patch("routers.admin.generate_download_signed_url", return_value="https://signed/yvt") as mock_gen:
+             patch("routers.admin.generate_download_signed_url", return_value="https://signed/st") as mock_gen:
             fake_bucket = MagicMock()
             fake_blob = MagicMock(); fake_blob.exists.return_value = True
             fake_bucket.blob.return_value = fake_blob
             mc.return_value.bucket.return_value = fake_bucket
-            resp = admin_client.get("/admin/gutenberg/ORDER-001/download-url?version=yvt")
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/download-url?version=simplified_tailo")
         assert resp.status_code == 200
-        assert "youth_vs_tailo.html" in mock_gen.call_args[0][0]
+        assert "simplified_tailo.html" in mock_gen.call_args[0][0]
 
-    def test_comparison_version_returns_book_comparison_html(self, admin_client, mock_db):
+    def test_full_vs_simplified_version_returns_full_vs_simplified_html(self, admin_client, mock_db):
         mock_db.execute.return_value.fetchone.return_value = self._order_row()
         with patch("routers.admin.storage.get_storage_client") as mc, \
-             patch("routers.admin.generate_download_signed_url", return_value="https://signed/cmp") as mock_gen:
+             patch("routers.admin.generate_download_signed_url", return_value="https://signed/fvs") as mock_gen:
             fake_bucket = MagicMock()
             fake_blob = MagicMock(); fake_blob.exists.return_value = True
             fake_bucket.blob.return_value = fake_blob
             mc.return_value.bucket.return_value = fake_bucket
-            resp = admin_client.get("/admin/gutenberg/ORDER-001/download-url?version=comparison")
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/download-url?version=full_vs_simplified")
         assert resp.status_code == 200
-        assert "book_comparison.html" in mock_gen.call_args[0][0]
+        assert "full_vs_simplified.html" in mock_gen.call_args[0][0]
+
+    def test_simplified_reader_version_returns_simplified_reader_html(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = self._order_row()
+        with patch("routers.admin.storage.get_storage_client") as mc, \
+             patch("routers.admin.generate_download_signed_url", return_value="https://signed/sr") as mock_gen:
+            fake_bucket = MagicMock()
+            fake_blob = MagicMock(); fake_blob.exists.return_value = True
+            fake_bucket.blob.return_value = fake_blob
+            mc.return_value.bucket.return_value = fake_bucket
+            resp = admin_client.get("/admin/gutenberg/ORDER-001/download-url?version=simplified_reader")
+        assert resp.status_code == 200
+        assert "simplified_reader.html" in mock_gen.call_args[0][0]
 
     def test_unknown_version_returns_400(self, admin_client, mock_db):
         resp = admin_client.get("/admin/gutenberg/ORDER-001/download-url?version=bogus")
