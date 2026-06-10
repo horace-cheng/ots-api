@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">您好，</p>
+<p>您的 Gutenberg 翻譯書籍有新進度：<strong>{{ stage_label }}</strong> 階段已完成。</p>
+
+<table class="details">
+  <tr><td>訂單編號</td><td>{{ order_id }}</td></tr>
+  <tr><td>處理階段</td><td>{{ stage_label }}</td></tr>
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ portal_url }}">查看訂單進度</a>
+</p>
+{% endblock %}
+{% set header_title = "書籍處理進度" %}
+{% block content_text %}您好，
+您的 Gutenberg 翻譯書籍有新進度：「{{ stage_label }}」階段已完成。
+訂單編號：{{ order_id }}
+處理階段：{{ stage_label }}
+請前往查看訂單進度：{{ portal_url }}
+{% endblock %}

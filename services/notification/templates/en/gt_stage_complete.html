@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="font-size:16px;color:#333;">Dear Customer,</p>
+<p>Your Gutenberg book translation has progressed: the <strong>{{ stage_label }}</strong> stage is complete.</p>
+
+<table class="details">
+  <tr><td>Order</td><td>{{ order_id }}</td></tr>
+  <tr><td>Stage</td><td>{{ stage_label }}</td></tr>
+</table>
+
+<p style="text-align:center;margin:24px 0;">
+  <a class="btn" href="{{ portal_url }}">View Order Progress</a>
+</p>
+{% endblock %}
+{% set header_title = "Book Processing" %}
+{% block content_text %}Dear Customer,
+Your Gutenberg book translation has progressed: "{{ stage_label }}" stage is complete.
+Order: {{ order_id }}
+Stage: {{ stage_label }}
+View order progress: {{ portal_url }}
+{% endblock %}

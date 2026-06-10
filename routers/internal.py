@@ -125,6 +125,9 @@ async def notify_internal(
                 "qa_score": body.get("qa_score", ""),
                 "output_url": body.get("output_url", ""),
             })
+        elif notify_type == "gt_stage_complete":
+            data["stage"] = body.get("stage", "")
+            data["stage_label"] = body.get("stage_label", "")
 
         await publish_event_sync(
             event_type=event_type,
@@ -143,6 +146,7 @@ _NOTIFY_TYPE_MAP = {
     "literary_assign_proofreader": EventType.PROOFREADER_ASSIGNED,
     "literary_editor_timeout": EventType.EDITOR_ASSIGNED,
     "literary_proofreader_timeout": EventType.PROOFREADER_ASSIGNED,
+    "gt_stage_complete": EventType.GT_STAGE_COMPLETE,
 }
 
 

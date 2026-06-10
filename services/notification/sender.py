@@ -67,6 +67,10 @@ _SUBJECT_MAP: dict[str, dict[str, str]] = {
         "zh-tw": "OTS 帳號已停用", "en": "Your OTS Account Has Been Disabled",
         "ja": "OTS アカウントが無効化されました", "ko": "OTS 계정이 비활성화되었습니다",
     },
+    "gt_stage_complete": {
+        "zh-tw": "OTS Gutenberg 書籍處理進度更新", "en": "OTS Gutenberg Book Processing Update",
+        "ja": "OTS Gutenberg 書籍処理更新", "ko": "OTS Gutenberg 도서 처리 업데이트",
+    },
 }
 
 _HEADER_MAP: dict[str, dict[str, str]] = {
@@ -85,6 +89,10 @@ _HEADER_MAP: dict[str, dict[str, str]] = {
     "delivery_complete": {
         "zh-tw": "翻譯完成", "en": "Translation Complete",
         "ja": "翻訳完了", "ko": "번역 완료",
+    },
+    "gt_stage_complete": {
+        "zh-tw": "書籍處理進度", "en": "Book Processing",
+        "ja": "書籍処理", "ko": "도서 처리",
     },
 }
 
@@ -280,6 +288,16 @@ async def handle_notify_event(db: AsyncSession, event_data: dict):
         if email:
             to_emails = [email]
         ctx["flag_count"] = str(data.get("flag_count", ""))
+
+    elif event_type == EventType.GT_STAGE_COMPLETE:
+        email = recipient_email or await resolve_order_user_email(db, order_id)
+        if email:
+            to_emails = [email]
+        ctx.update({
+            "stage_label": data.get("stage_label", ""),
+            "stage": data.get("stage", ""),
+            "portal_url": f"{settings.web_portal_url}/admin/orders/{order_id}",
+        })
 
     if not to_emails:
         logger.info(f"No recipients resolved for {event_type}, order={order_id}")

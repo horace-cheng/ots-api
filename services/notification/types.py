@@ -16,6 +16,7 @@ class EventType(str, Enum):
     USER_REGISTERED = "user_registered"
     USER_ENABLED = "user_enabled"
     USER_DISABLED = "user_disabled"
+    GT_STAGE_COMPLETE = "gt_stage_complete"
 
 
 @dataclass
