@@ -4,6 +4,13 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
+# Video assembly 需要 FFmpeg + fontconfig
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    fontconfig \
+    fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # 先複製 requirements，利用 Docker layer cache
