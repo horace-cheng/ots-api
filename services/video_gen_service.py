@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from typing import Optional
 from urllib.parse import urljoin
 
@@ -78,8 +79,8 @@ def synthesize_speech(text: str, voice_id: str = "cmn-TW-vs2-F04",
 
 # ── Hugging Face Image Generation ──────────────────────────────────────────────
 
-def generate_image(prompt: str) -> bytes:
-    """Generate image via Hugging Face Inference API. Returns JPEG bytes."""
+def _hf_image(prompt: str) -> bytes:
+    """Generate image via Hugging Face Inference API."""
     url = f"https://router.huggingface.co/hf-inference/models/{settings.hf_image_model}"
     headers = {"Authorization": f"Bearer {settings.hf_api_token}"}
     payload = {
@@ -95,11 +96,75 @@ def generate_image(prompt: str) -> bytes:
     resp.raise_for_status()
     content_type = resp.headers.get("Content-Type", "")
     if "image" not in content_type:
-        raise ValueError(f"Unexpected response type: {content_type}")
+        raise ValueError(f"HF unexpected response type: {content_type}")
     return resp.content
 
 
+_REPLICATE_API = "https://api.replicate.com/v1/models"
+_REPLICATE_POLL = "https://api.replicate.com/v1/predictions"
+
+
+def _replicate_image(prompt: str) -> bytes:
+    """Generate image via Replicate API with FLUX model."""
+    token = settings.replicate_api_token
+    if not token:
+        raise ValueError("Replicate API token not configured")
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload = {
+        "input": {
+            "prompt": prompt,
+            "num_outputs": 1,
+            "aspect_ratio": "16:9",
+            "output_format": "jpg",
+            "go_fast": True,
+        }
+    }
+    r = requests.post(
+        f"{_REPLICATE_API}/black-forest-labs/flux-schnell/predictions",
+        json=payload, headers=headers, timeout=30,
+    )
+    r.raise_for_status()
+    pred = r.json()
+    poll_url = pred.get("urls", {}).get("get", f"{_REPLICATE_POLL}/{pred['id']}")
+    for _ in range(60):
+        time.sleep(2)
+        pr = requests.get(poll_url, headers=headers, timeout=30)
+        pr.raise_for_status()
+        status = pr.json().get("status")
+        if status == "succeeded":
+            output = pr.json().get("output")
+            if isinstance(output, list) and output:
+                img_r = requests.get(output[0], timeout=60)
+                img_r.raise_for_status()
+                return img_r.content
+            raise ValueError(f"Replicate no output: {output}")
+        if status == "failed":
+            raise ValueError(f"Replicate prediction failed")
+    raise TimeoutError("Replicate prediction timed out")
+
+
+def generate_image(prompt: str) -> bytes:
+    """Generate image — tries Hugging Face first, falls back to Replicate."""
+    if settings.hf_api_token:
+        try:
+            return _hf_image(prompt)
+        except Exception as e:
+            logger.warning(f"HF image gen failed ({e}), falling back to Replicate")
+    return _replicate_image(prompt)
+
+
 # ── Scene Video Assembly ───────────────────────────────────────────────────────
+
+def _run_ffmpeg(args: list[str], desc: str = ""):
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("FFmpeg not found")
+    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"] + args
+    logger.info(f"FFmpeg: {desc}")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg failed: {result.stderr}")
+
 
 def assemble_scene_video(audio_bytes: bytes, image_bytes: bytes) -> Optional[bytes]:
     """Use FFmpeg to combine image + audio into an MP4 clip.
@@ -141,6 +206,121 @@ def assemble_scene_video(audio_bytes: bytes, image_bytes: bytes) -> Optional[byt
             return f.read()
     except Exception as e:
         logger.error(f"Scene video assembly error: {e}")
+        return None
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ── Chapter Video Assembly ──────────────────────────────────────────────────────
+
+def assemble_chapter_video(
+    order_id: str,
+    chapter_index: int,
+    scenes: list[dict],
+    title: str = "",
+) -> Optional[bytes]:
+    """Assemble all scenes in a chapter into one MP4 with a title card.
+
+    Downloads audio + image for each scene from GCS temp bucket,
+    creates clips, concatenates, and returns MP4 bytes.
+    """
+    from google.cloud import storage
+    from PIL import Image, ImageDraw, ImageFont
+
+    client = storage.Client(project=settings.project_id)
+    bucket = client.bucket(settings.gcs_temp_bucket)
+
+    tmpdir = tempfile.mkdtemp(prefix=f"ch{chapter_index}_")
+    try:
+        concat_file = os.path.join(tmpdir, "concat.txt")
+        clip_index = 0
+        total_scenes = 0
+
+        with open(concat_file, "w") as cf:
+            # Title card
+            if title:
+                ZH_TITLES = {
+                    0: "原始荒野", 1: "棍棒與利牙的法則", 2: "原始巨獸的統治",
+                    3: "誰奪得主權", 4: "拖繩與道路的苦役", 5: "為了對一個人的愛",
+                    6: "呼喚的聲音",
+                }
+                W, H = 1024, 576
+                img = Image.new("RGB", (W, H), (26, 26, 46))
+                draw = ImageDraw.Draw(img)
+                font_cjk = None
+                for p in ["/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc",
+                          "/usr/share/fonts/truetype/arphic/uming.ttc"]:
+                    if os.path.exists(p):
+                        font_cjk = ImageFont.truetype(p, 52)
+                        break
+                font_en = None
+                for p in ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                          "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]:
+                    if os.path.exists(p):
+                        font_en = ImageFont.truetype(p, 22)
+                        break
+                if font_cjk is None:
+                    font_cjk = ImageFont.load_default()
+                if font_en is None:
+                    font_en = ImageFont.load_default()
+                zh = ZH_TITLES.get(chapter_index, title)
+                _, _, tw, _ = draw.textbbox((0, 0), f"Chapter {chapter_index + 1}", font=font_en)
+                draw.text(((W - tw) / 2, H * 0.32), f"Chapter {chapter_index + 1}", fill=(180, 180, 200), font=font_en)
+                _, _, tw, _ = draw.textbbox((0, 0), zh, font=font_cjk)
+                draw.text(((W - tw) / 2, H * 0.45), zh, fill=(255, 255, 255), font=font_cjk)
+                title_png = os.path.join(tmpdir, "title.png")
+                img.save(title_png)
+                title_mp4 = os.path.join(tmpdir, "title.mp4")
+                _run_ffmpeg([
+                    "-loop", "1", "-i", title_png,
+                    "-f", "lavfi", "-i", "anullsrc=channel_layout=mono:sample_rate=16000",
+                    "-c:v", "libx264", "-tune", "stillimage", "-b:v", "2M",
+                    "-c:a", "aac", "-b:a", "192k", "-shortest",
+                    "-pix_fmt", "yuv420p", "-t", "4",
+                    title_mp4,
+                ], desc=f"Title card ch{chapter_index + 1}")
+                cf.write(f"file '{title_mp4}'\n")
+                clip_index += 1
+
+            # Scene clips
+            for scene in sorted(scenes, key=lambda s: s["scene_index"]):
+                s_idx = scene["scene_index"]
+                wav_blob = bucket.blob(f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/narration.wav")
+                jpg_blob = bucket.blob(f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/visual.jpg")
+                if not wav_blob.exists() or not jpg_blob.exists():
+                    continue
+
+                wav_path = os.path.join(tmpdir, f"s{chapter_index}_{s_idx}.wav")
+                jpg_path = os.path.join(tmpdir, f"s{chapter_index}_{s_idx}.jpg")
+                clip_path = os.path.join(tmpdir, f"clip_{clip_index}.mp4")
+                wav_blob.download_to_filename(wav_path)
+                jpg_blob.download_to_filename(jpg_path)
+
+                _run_ffmpeg([
+                    "-loop", "1", "-i", jpg_path, "-i", wav_path,
+                    "-c:v", "libx264", "-tune", "stillimage", "-b:v", "2M",
+                    "-c:a", "aac", "-b:a", "192k", "-pix_fmt", "yuv420p", "-shortest",
+                    "-movflags", "+faststart",
+                    clip_path,
+                ], desc=f"Scene {chapter_index}.{s_idx}")
+                cf.write(f"file '{clip_path}'\n")
+                clip_index += 1
+                total_scenes += 1
+
+        if total_scenes == 0:
+            logger.warning(f"No scenes with assets for chapter {chapter_index}")
+            return None
+
+        output_path = os.path.join(tmpdir, f"chapter_{chapter_index:02d}.mp4")
+        _run_ffmpeg([
+            "-f", "concat", "-safe", "0", "-i", concat_file,
+            "-c", "copy", output_path,
+        ], desc=f"Chapter {chapter_index} ({total_scenes} scenes)")
+
+        with open(output_path, "rb") as f:
+            return f.read()
+    except Exception as e:
+        logger.error(f"Chapter video assembly error: {e}")
         return None
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

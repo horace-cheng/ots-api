@@ -2102,7 +2102,7 @@ async def admin_get_video_materials(
     admin: dict        = Depends(get_admin_user),
     db:   AsyncSession = Depends(get_db),
 ):
-    """Fetch the video_materials.json storyboard for a Gutenberg order."""
+    """Fetch the video_materials.json storyboard + existing assets for a Gutenberg order."""
     row = await db.execute(
         text("SELECT track_type FROM orders WHERE id = :id"),
         {"id": order_id},
@@ -2113,17 +2113,53 @@ async def admin_get_video_materials(
     if r.track_type != "gutenberg":
         raise HTTPException(400, "Only Gutenberg orders have video materials")
 
-    from core.storage import get_storage_client
+    from core.storage import get_storage_client, generate_signed_url
+    from datetime import timedelta
+
     client = get_storage_client()
-    bucket = client.bucket(settings.gcs_temp_bucket)
-    blob = bucket.blob(f"pipeline/{order_id}/video_materials.json")
+    temp_bucket = client.bucket(settings.gcs_temp_bucket)
+    out_bucket = client.bucket(settings.gcs_outputs_bucket)
+
+    # Load storyboard
+    blob = temp_bucket.blob(f"pipeline/{order_id}/video_materials.json")
     if not blob.exists():
         return {"materials": None, "message": "Video materials not yet generated"}
     content = blob.download_as_text(encoding="utf-8")
     try:
-        return {"materials": json.loads(content)}
+        materials = json.loads(content)
     except json.JSONDecodeError:
         raise HTTPException(500, "Invalid video_materials.json")
+
+    # Check for existing scene assets
+    scene_assets = {}
+    chapters = materials.get("chapters", [])
+    for ch in chapters:
+        ch_idx = ch["chapter_index"]
+        for scene in ch.get("scenes", []):
+            s_idx = scene["scene_index"]
+            key = f"{ch_idx}_{s_idx}"
+            entry = {"audio_url": None, "image_url": None}
+            audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/narration.wav"
+            image_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/visual.jpg"
+            if temp_bucket.blob(audio_path).exists():
+                entry["audio_url"] = generate_signed_url(settings.gcs_temp_bucket, audio_path)
+            if temp_bucket.blob(image_path).exists():
+                entry["image_url"] = generate_signed_url(settings.gcs_temp_bucket, image_path)
+            scene_assets[key] = entry
+
+    # Check for existing chapter videos
+    chapter_videos = {}
+    for ch in chapters:
+        ch_idx = ch["chapter_index"]
+        ch_path = f"orders/{order_id}/chapter_{ch_idx:02d}.mp4"
+        if out_bucket.blob(ch_path).exists():
+            chapter_videos[str(ch_idx)] = generate_signed_url(settings.gcs_outputs_bucket, ch_path)
+
+    return {
+        "materials": materials,
+        "scene_assets": scene_assets,
+        "chapter_videos": chapter_videos,
+    }
 
 
 @router.put("/orders/{order_id}/video-materials")
@@ -2302,3 +2338,51 @@ async def admin_scene_assemble(
         "video_data_url": f"data:video/mp4;base64,{video_b64}",
         "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}",
     }
+
+
+@router.post("/orders/{order_id}/video-materials/chapter/assemble")
+async def admin_chapter_assemble(
+    order_id: str,
+    body: dict,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Assemble all scenes in a chapter into one MP4 with a title card."""
+    ch_idx = body.get("chapter_index")
+    if ch_idx is None:
+        raise HTTPException(400, "chapter_index is required")
+
+    from core.storage import get_storage_client
+
+    # Load storyboard to get scenes + title
+    client = get_storage_client()
+    temp_bucket = client.bucket(settings.gcs_temp_bucket)
+    blob = temp_bucket.blob(f"pipeline/{order_id}/video_materials.json")
+    if not blob.exists():
+        raise HTTPException(400, "video_materials.json not found")
+    materials = json.loads(blob.download_as_text(encoding="utf-8"))
+    chapters = materials.get("chapters", [])
+    chapter = next((ch for ch in chapters if ch["chapter_index"] == ch_idx), None)
+    if not chapter:
+        raise HTTPException(404, f"Chapter {ch_idx} not found")
+
+    from services.video_gen_service import assemble_chapter_video
+    mp4_bytes = assemble_chapter_video(
+        order_id=order_id,
+        chapter_index=ch_idx,
+        scenes=chapter.get("scenes", []),
+        title=chapter.get("title", ""),
+    )
+    if mp4_bytes is None:
+        raise HTTPException(500, "Chapter assembly failed — generate audio + image for all scenes first")
+
+    # Upload to outputs bucket
+    out_bucket = client.bucket(settings.gcs_outputs_bucket)
+    blob_path = f"orders/{order_id}/chapter_{ch_idx:02d}.mp4"
+    out_bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
+
+    from datetime import timedelta
+    video_url = out_bucket.blob(blob_path).generate_signed_url(
+        version="v4", expiration=timedelta(hours=1), method="GET")
+
+    return {"video_url": video_url, "gcs_path": f"gs://{settings.gcs_outputs_bucket}/{blob_path}"}

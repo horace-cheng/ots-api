@@ -91,6 +91,24 @@ def generate_download_signed_url(
     return signed_url
 
 
+def generate_signed_url(
+    bucket_name: str,
+    blob_path: str,
+    expiration_minutes: int = 60,
+) -> str:
+    """產生任何 GCS Bucket 的 Signed URL（GET method）。"""
+    client = get_storage_client()
+    bucket = client.bucket(bucket_name)
+    blob   = bucket.blob(blob_path)
+    signed_url = blob.generate_signed_url(
+        version     = "v4",
+        expiration  = timedelta(minutes=expiration_minutes),
+        method      = "GET",
+        credentials = _get_signing_credentials(),
+    )
+    return signed_url
+
+
 def read_temp_json(order_id: str, filename: str) -> dict | list:
     """從 temp bucket 讀取 JSON"""
     client = get_storage_client()
