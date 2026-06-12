@@ -2382,7 +2382,7 @@ async def admin_chapter_assemble(
     out_bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
 
     from datetime import timedelta
-    video_url = out_bucket.blob(blob_path).generate_signed_url(
-        version="v4", expiration=timedelta(hours=1), method="GET")
+    from core.storage import generate_signed_url
+    video_url = generate_signed_url(settings.gcs_outputs_bucket, blob_path)
 
     return {"video_url": video_url, "gcs_path": f"gs://{settings.gcs_outputs_bucket}/{blob_path}"}
