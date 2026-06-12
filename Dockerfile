@@ -1,26 +1,26 @@
 FROM python:3.12-slim
 
-# 避免 Python 輸出被 buffer，讓 Cloud Run log 即時顯示
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Video assembly 需要 FFmpeg + fontconfig
+# Video assembly 需要 FFmpeg
+# 只下載 NotoSerifCJK-Bold.otf（~20MB），不定義龐大的 fonts-noto-cjk（~200MB）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    fontconfig \
-    fonts-noto-cjk \
-    && rm -rf /var/lib/apt/lists/*
+    curl \
+    ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /usr/share/fonts/opentype/noto \
+    && curl -fsSL -o /usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.otf \
+       https://raw.githubusercontent.com/notofonts/noto-cjk/main/Serif/OTF/NotoSerifCJK-Bold.otf
 
 WORKDIR /app
 
-# 先複製 requirements，利用 Docker layer cache
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 複製應用程式碼
 COPY . .
 
-# Cloud Run 預設 port 8080
 EXPOSE 8080
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]

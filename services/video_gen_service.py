@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import wave
 from typing import Optional
 from urllib.parse import urljoin
 
@@ -187,13 +188,18 @@ def assemble_scene_video(audio_bytes: bytes, image_bytes: bytes) -> Optional[byt
         with open(wav_path, "wb") as f:
             f.write(audio_bytes)
 
+        # Get exact audio duration from WAV header
+        with wave.open(wav_path, 'r') as wf:
+            audio_duration = wf.getnframes() / wf.getframerate()
+
         result = subprocess.run(
             [ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
              "-loop", "1", "-i", img_path, "-i", wav_path,
              "-c:v", "libx264", "-tune", "stillimage",
              "-b:v", "2M",
              "-c:a", "aac", "-b:a", "192k",
-             "-pix_fmt", "yuv420p", "-shortest",
+             "-pix_fmt", "yuv420p",
+             "-t", f"{audio_duration:.3f}",
              "-movflags", "+faststart",
              out_path],
             capture_output=True, text=True, timeout=60,
@@ -248,7 +254,8 @@ def assemble_chapter_video(
                 img = Image.new("RGB", (W, H), (26, 26, 46))
                 draw = ImageDraw.Draw(img)
                 font_cjk = None
-                for p in ["/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc",
+                for p in ["/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.otf",
+                          "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc",
                           "/usr/share/fonts/truetype/arphic/uming.ttc"]:
                     if os.path.exists(p):
                         font_cjk = ImageFont.truetype(p, 52)
@@ -296,10 +303,16 @@ def assemble_chapter_video(
                 wav_blob.download_to_filename(wav_path)
                 jpg_blob.download_to_filename(jpg_path)
 
+                # Get exact audio duration from WAV header — ensures video clip matches precisely
+                with wave.open(wav_path, 'r') as wf:
+                    audio_duration = wf.getnframes() / wf.getframerate()
                 _run_ffmpeg([
-                    "-loop", "1", "-i", jpg_path, "-i", wav_path,
+                    "-loop", "1", "-i", jpg_path,
+                    "-i", wav_path,
                     "-c:v", "libx264", "-tune", "stillimage", "-b:v", "2M",
-                    "-c:a", "aac", "-b:a", "192k", "-pix_fmt", "yuv420p", "-shortest",
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-pix_fmt", "yuv420p",
+                    "-t", f"{audio_duration:.3f}",
                     clip_path,
                 ], desc=f"Scene {chapter_index}.{s_idx}")
                 cf.write(f"file '{clip_path}'\n")
