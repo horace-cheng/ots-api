@@ -84,6 +84,50 @@ async def trigger_pipeline(order_id: str) -> str:
         return ""
 
 
+VIDEO_GEN_JOB_NAME = "ots-gt-video-gen-{env}"
+
+
+async def trigger_video_gen_job(order_id: str, voice_id: str = "cmn-TW-vs2-F04", speaking_rate: float = 1.0) -> str:
+    """Trigger the gt_video_gen Cloud Run Job."""
+    try:
+        import asyncio
+        from google.cloud.run_v2 import JobsClient
+        from google.cloud.run_v2.types import RunJobRequest, EnvVar
+
+        env = settings.env
+        project_id = settings.project_id
+        region = settings.region
+        full_job_name = VIDEO_GEN_JOB_NAME.format(env=env)
+        name = f"projects/{project_id}/locations/{region}/jobs/{full_job_name}"
+
+        request = RunJobRequest(
+            name=name,
+            overrides=RunJobRequest.Overrides(
+                container_overrides=[
+                    RunJobRequest.Overrides.ContainerOverride(
+                        env=[
+                            EnvVar(name="ORDER_ID", value=order_id),
+                            EnvVar(name="VOICE_ID", value=voice_id),
+                            EnvVar(name="SPEAKING_RATE", value=str(speaking_rate)),
+                        ]
+                    )
+                ]
+            ),
+        )
+
+        loop = asyncio.get_event_loop()
+        client = JobsClient()
+        operation = await loop.run_in_executor(
+            None, lambda: client.run_job(request=request)
+        )
+        logger.info(f"Video gen job triggered: order={order_id}, job={full_job_name}")
+        return order_id
+
+    except Exception as e:
+        logger.error(f"Failed to trigger video gen job for order {order_id}: {e}")
+        raise
+
+
 async def trigger_deliver_job(order_id: str, track_type: str) -> str:
     """
     直接觸發 Cloud Run Jobs 的 deliver job（不跑完整 pipeline）。

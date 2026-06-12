@@ -2091,3 +2091,106 @@ async def list_eligible_users(
         ))
         
     return UserListResponse(users=users, total=len(users))
+
+
+# ── Video Materials (Gutenberg Track) ────────────────────────────────────────
+
+@router.get("/orders/{order_id}/video-materials")
+async def admin_get_video_materials(
+    order_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Fetch the video_materials.json storyboard for a Gutenberg order."""
+    row = await db.execute(
+        text("SELECT track_type FROM orders WHERE id = :id"),
+        {"id": order_id},
+    )
+    r = row.fetchone()
+    if not r:
+        raise HTTPException(404, "Order not found")
+    if r.track_type != "gutenberg":
+        raise HTTPException(400, "Only Gutenberg orders have video materials")
+
+    from core.storage import get_storage_client
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+    blob = bucket.blob(f"pipeline/{order_id}/video_materials.json")
+    if not blob.exists():
+        return {"materials": None, "message": "Video materials not yet generated"}
+    content = blob.download_as_text(encoding="utf-8")
+    try:
+        return {"materials": json.loads(content)}
+    except json.JSONDecodeError:
+        raise HTTPException(500, "Invalid video_materials.json")
+
+
+@router.put("/orders/{order_id}/video-materials")
+async def admin_save_video_materials(
+    order_id: str,
+    body: dict,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Save edited video_materials.json storyboard."""
+    from core.storage import get_storage_client
+
+    row = await db.execute(
+        text("SELECT track_type FROM orders WHERE id = :id"),
+        {"id": order_id},
+    )
+    r = row.fetchone()
+    if not r:
+        raise HTTPException(404, "Order not found")
+    if r.track_type != "gutenberg":
+        raise HTTPException(400, "Only Gutenberg orders have video materials")
+
+    materials = body.get("materials")
+    if not materials:
+        raise HTTPException(400, "materials field is required")
+
+    raw = json.dumps(materials, ensure_ascii=False, indent=2)
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+    bucket.blob(f"pipeline/{order_id}/video_materials.json").upload_from_string(
+        raw.encode("utf-8"), content_type="application/json",
+    )
+    return {"message": "Video materials saved"}
+
+
+@router.post("/orders/{order_id}/video-materials/approve")
+async def admin_approve_video_materials(
+    order_id: str,
+    body: dict,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Approve storyboard and trigger video generation."""
+    from services.pipeline import trigger_video_gen_job
+    from core.storage import get_storage_client
+
+    row = await db.execute(
+        text("SELECT track_type, status FROM orders WHERE id = :id"),
+        {"id": order_id},
+    )
+    r = row.fetchone()
+    if not r:
+        raise HTTPException(404, "Order not found")
+    if r.track_type != "gutenberg":
+        raise HTTPException(400, "Only Gutenberg orders support video generation")
+
+    # Save the approved materials first
+    materials = body.get("materials")
+    if materials:
+        raw = json.dumps(materials, ensure_ascii=False, indent=2)
+        client = get_storage_client()
+        bucket = client.bucket(settings.gcs_temp_bucket)
+        bucket.blob(f"pipeline/{order_id}/video_materials.json").upload_from_string(
+            raw.encode("utf-8"), content_type="application/json",
+        )
+
+    voice_id = body.get("voice_id", "cmn-TW-vs2-F04")
+    speaking_rate = body.get("speaking_rate", 1.0)
+
+    await trigger_video_gen_job(order_id, voice_id, speaking_rate)
+    return {"message": "Video generation triggered", "order_id": order_id}
