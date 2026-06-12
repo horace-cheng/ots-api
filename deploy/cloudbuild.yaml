@@ -66,6 +66,7 @@ steps:
       - --no-allow-unauthenticated
       - --min-instances=0
       - --max-instances=5
+      - --memory=1Gi
       - --quiet
 
 substitutions:
