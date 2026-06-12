@@ -300,7 +300,6 @@ def assemble_chapter_video(
                     "-loop", "1", "-i", jpg_path, "-i", wav_path,
                     "-c:v", "libx264", "-tune", "stillimage", "-b:v", "2M",
                     "-c:a", "aac", "-b:a", "192k", "-pix_fmt", "yuv420p", "-shortest",
-                    "-movflags", "+faststart",
                     clip_path,
                 ], desc=f"Scene {chapter_index}.{s_idx}")
                 cf.write(f"file '{clip_path}'\n")
@@ -313,8 +312,10 @@ def assemble_chapter_video(
 
         output_path = os.path.join(tmpdir, f"chapter_{chapter_index:02d}.mp4")
         _run_ffmpeg([
-            "-f", "concat", "-safe", "0", "-i", concat_file,
-            "-c", "copy", output_path,
+            "-f", "concat", "-safe", "0",
+            "-fflags", "+genpts",
+            "-i", concat_file,
+            "-c", "copy", "-movflags", "+faststart", output_path,
         ], desc=f"Chapter {chapter_index} ({total_scenes} scenes)")
 
         with open(output_path, "rb") as f:
