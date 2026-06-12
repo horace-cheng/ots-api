@@ -254,8 +254,9 @@ def assemble_chapter_video(
                 img = Image.new("RGB", (W, H), (26, 26, 46))
                 draw = ImageDraw.Draw(img)
                 font_cjk = None
-                for p in ["/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.otf",
+                for p in ["/usr/share/fonts/opentype/noto/NotoSerifCJKtc-Bold.otf",
                           "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc",
+                          "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.otf",
                           "/usr/share/fonts/truetype/arphic/uming.ttc"]:
                     if os.path.exists(p):
                         font_cjk = ImageFont.truetype(p, 52)

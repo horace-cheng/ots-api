@@ -4,15 +4,14 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
 # Video assembly 需要 FFmpeg
-# 只下載 NotoSerifCJK-Bold.otf（~20MB），不定義龐大的 fonts-noto-cjk（~200MB）
+# 只下載 NotoSerifCJKtc-Bold.otf（~15MB），不定義龐大的 fonts-noto-cjk（~200MB）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
-    ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /usr/share/fonts/opentype/noto \
-    && curl -fsSL -o /usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.otf \
-       https://raw.githubusercontent.com/notofonts/noto-cjk/main/Serif/OTF/NotoSerifCJK-Bold.otf
+    && curl -fsSL -o /usr/share/fonts/opentype/noto/NotoSerifCJKtc-Bold.otf \
+       https://raw.githubusercontent.com/notofonts/noto-cjk/main/Serif/OTF/TraditionalChinese/NotoSerifCJKtc-Bold.otf
 
 WORKDIR /app
 
