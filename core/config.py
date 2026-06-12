@@ -56,6 +56,18 @@ class Settings(BaseSettings):
     # ── Notification Pub/Sub ───────────────────────────────────────────────
     notify_topic: str = os.environ.get("NOTIFY_TOPIC", f"ots-notify-dev")
 
+    # ── BRONCI TTS ─────────────────────────────────────────────────────────
+    bronci_username: str  = os.environ.get("BRONCI_API_USERNAME", "")
+    bronci_password: str  = os.environ.get("BRONCI_API_PASSWORD", "")
+    bronci_base_url: str  = os.environ.get("BRONCI_API_BASE_URL", "https://rbtttsapi.bronci.com.tw")
+
+    # ── Hugging Face Inference API ─────────────────────────────────────────
+    hf_api_token: str      = os.environ.get("HF_API_TOKEN", "")
+    hf_image_model: str    = os.environ.get("HF_IMAGE_MODEL", "black-forest-labs/FLUX.1-schnell")
+
+    # ── Replicate (fallback image gen) ─────────────────────────────────────
+    replicate_api_token: str = os.environ.get("REPLICATE_API_TOKEN", "")
+
     class Config:
         # 允許從 .env 檔載入（本機開發用）
         env_file = ".env"

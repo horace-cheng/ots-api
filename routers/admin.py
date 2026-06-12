@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 from datetime import datetime, timezone
 from uuid import UUID
+import base64
 import json
 import logging
 from typing import Optional
@@ -2194,3 +2195,110 @@ async def admin_approve_video_materials(
 
     await trigger_video_gen_job(order_id, voice_id, speaking_rate)
     return {"message": "Video generation triggered", "order_id": order_id}
+
+
+@router.post("/orders/{order_id}/video-materials/scene/tts")
+async def admin_scene_tts(
+    order_id: str,
+    body: dict,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Generate TTS audio for a single scene."""
+    ch_idx = body.get("chapter_index")
+    s_idx = body.get("scene_index")
+    text = body.get("text", "")
+    voice_id = body.get("voice_id", "cmn-TW-vs2-F04")
+    speaking_rate = body.get("speaking_rate", 1.0)
+
+    if ch_idx is None or s_idx is None or not text:
+        raise HTTPException(400, "chapter_index, scene_index, and text are required")
+
+    from services.video_gen_service import synthesize_speech
+    wav_bytes = synthesize_speech(text, voice_id=voice_id, speaking_rate=speaking_rate)
+    audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
+    data_url = f"data:audio/wav;base64,{audio_b64}"
+
+    # Also persist to GCS for later use
+    from core.storage import get_storage_client
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+    blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/narration.wav"
+    bucket.blob(blob_path).upload_from_string(wav_bytes, content_type="audio/wav")
+
+    return {"audio_data_url": data_url, "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}"}
+
+
+@router.post("/orders/{order_id}/video-materials/scene/image")
+async def admin_scene_image(
+    order_id: str,
+    body: dict,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Generate image for a single scene."""
+    ch_idx = body.get("chapter_index")
+    s_idx = body.get("scene_index")
+    prompt = body.get("prompt", "")
+
+    if ch_idx is None or s_idx is None or not prompt:
+        raise HTTPException(400, "chapter_index, scene_index, and prompt are required")
+
+    from services.video_gen_service import generate_image
+    jpg_bytes = generate_image(prompt)
+    img_b64 = base64.b64encode(jpg_bytes).decode("utf-8")
+    data_url = f"data:image/jpeg;base64,{img_b64}"
+
+    # Persist to GCS
+    from core.storage import get_storage_client
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+    blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/visual.jpg"
+    bucket.blob(blob_path).upload_from_string(jpg_bytes, content_type="image/jpeg")
+
+    return {"image_data_url": data_url, "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}"}
+
+
+@router.post("/orders/{order_id}/video-materials/scene/assemble")
+async def admin_scene_assemble(
+    order_id: str,
+    body: dict,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Assemble audio + image into a video clip for a single scene."""
+    ch_idx = body.get("chapter_index")
+    s_idx = body.get("scene_index")
+
+    if ch_idx is None or s_idx is None:
+        raise HTTPException(400, "chapter_index and scene_index are required")
+
+    from services.video_gen_service import assemble_scene_video
+    from core.storage import get_storage_client
+
+    # Load persisted assets from GCS
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+
+    wav_blob = bucket.blob(f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/narration.wav")
+    jpg_blob = bucket.blob(f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/visual.jpg")
+
+    if not wav_blob.exists() or not jpg_blob.exists():
+        raise HTTPException(400, "Generate TTS and image first before assembling video")
+
+    audio_bytes = wav_blob.download_as_bytes()
+    image_bytes = jpg_blob.download_as_bytes()
+
+    mp4_bytes = assemble_scene_video(audio_bytes, image_bytes)
+    if mp4_bytes is None:
+        raise HTTPException(500, "Video assembly failed — FFmpeg may be unavailable")
+
+    # Persist to GCS
+    blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/scene_video.mp4"
+    bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
+
+    video_b64 = base64.b64encode(mp4_bytes).decode("utf-8")
+    return {
+        "video_data_url": f"data:video/mp4;base64,{video_b64}",
+        "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}",
+    }

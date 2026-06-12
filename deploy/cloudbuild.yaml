@@ -45,6 +45,11 @@ steps:
       - --set-secrets=ECPAY_HASH_IV=ots-ecpay-hash-iv-$_ENV:latest
       - --set-secrets=GEMINI_API_KEY=ots-google-ai-key-$_ENV:latest
       - --set-secrets=BREVO_API_KEY=ots-brevo-apikey-$_ENV:latest
+      - --set-secrets=BRONCI_API_USERNAME=ots-bronci-username-$_ENV:latest
+      - --set-secrets=BRONCI_API_PASSWORD=ots-bronci-password-$_ENV:latest
+      - --set-secrets=BRONCI_API_BASE_URL=ots-bronci-base-url-$_ENV:latest
+      - --set-secrets=HF_API_TOKEN=ots-hf-api-token-$_ENV:latest
+      - --set-secrets=REPLICATE_API_TOKEN=ots-replicate-api-token-$_ENV:latest
       - --set-env-vars=PROJECT_ID=$PROJECT_ID
       - --set-env-vars=SERVICE_ACCOUNT_EMAIL=ots-api-backend-$_ENV@$PROJECT_ID.iam.gserviceaccount.com      
       - --set-env-vars=INTERNAL_ALLOWED_SA=ots-workflow-$_ENV@$PROJECT_ID.iam.gserviceaccount.com
