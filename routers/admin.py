@@ -2395,3 +2395,25 @@ async def admin_chapter_assemble(
     srt_url = generate_signed_url(settings.gcs_outputs_bucket, srt_path) if srt_content else None
 
     return {"video_url": video_url, "srt_url": srt_url, "gcs_path": f"gs://{settings.gcs_outputs_bucket}/{blob_path}"}
+
+
+@router.put("/orders/{order_id}/video-materials/chapter/srt")
+async def admin_save_chapter_srt(
+    order_id: str,
+    body: dict,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Save edited SRT content for a chapter."""
+    ch_idx = body.get("chapter_index")
+    srt_content = body.get("srt_content")
+    if ch_idx is None or srt_content is None:
+        raise HTTPException(400, "chapter_index and srt_content are required")
+
+    from core.storage import get_storage_client, generate_signed_url
+    client = get_storage_client()
+    out_bucket = client.bucket(settings.gcs_outputs_bucket)
+    srt_path = f"orders/{order_id}/chapter_{ch_idx:02d}.srt"
+    out_bucket.blob(srt_path).upload_from_string(srt_content, content_type="text/plain; charset=utf-8")
+    srt_url = generate_signed_url(settings.gcs_outputs_bucket, srt_path)
+    return {"srt_url": srt_url}
