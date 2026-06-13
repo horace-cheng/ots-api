@@ -2147,18 +2147,23 @@ async def admin_get_video_materials(
                 entry["image_url"] = generate_signed_url(settings.gcs_temp_bucket, image_path)
             scene_assets[key] = entry
 
-    # Check for existing chapter videos
+    # Check for existing chapter videos & SRTs
     chapter_videos = {}
+    chapter_srts = {}
     for ch in chapters:
         ch_idx = ch["chapter_index"]
         ch_path = f"orders/{order_id}/chapter_{ch_idx:02d}.mp4"
         if out_bucket.blob(ch_path).exists():
             chapter_videos[str(ch_idx)] = generate_signed_url(settings.gcs_outputs_bucket, ch_path)
+        srt_path = f"orders/{order_id}/chapter_{ch_idx:02d}.srt"
+        if out_bucket.blob(srt_path).exists():
+            chapter_srts[str(ch_idx)] = generate_signed_url(settings.gcs_outputs_bucket, srt_path)
 
     return {
         "materials": materials,
         "scene_assets": scene_assets,
         "chapter_videos": chapter_videos,
+        "chapter_srts": chapter_srts,
     }
 
 
@@ -2367,7 +2372,7 @@ async def admin_chapter_assemble(
         raise HTTPException(404, f"Chapter {ch_idx} not found")
 
     from services.video_gen_service import assemble_chapter_video
-    mp4_bytes = assemble_chapter_video(
+    mp4_bytes, srt_content = assemble_chapter_video(
         order_id=order_id,
         chapter_index=ch_idx,
         scenes=chapter.get("scenes", []),
@@ -2376,13 +2381,17 @@ async def admin_chapter_assemble(
     if mp4_bytes is None:
         raise HTTPException(500, "Chapter assembly failed — generate audio + image for all scenes first")
 
-    # Upload to outputs bucket
     out_bucket = client.bucket(settings.gcs_outputs_bucket)
     blob_path = f"orders/{order_id}/chapter_{ch_idx:02d}.mp4"
     out_bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
 
-    from datetime import timedelta
+    # Upload SRT alongside the video
+    srt_path = f"orders/{order_id}/chapter_{ch_idx:02d}.srt"
+    if srt_content:
+        out_bucket.blob(srt_path).upload_from_string(srt_content, content_type="text/plain; charset=utf-8")
+
     from core.storage import generate_signed_url
     video_url = generate_signed_url(settings.gcs_outputs_bucket, blob_path)
+    srt_url = generate_signed_url(settings.gcs_outputs_bucket, srt_path) if srt_content else None
 
-    return {"video_url": video_url, "gcs_path": f"gs://{settings.gcs_outputs_bucket}/{blob_path}"}
+    return {"video_url": video_url, "srt_url": srt_url, "gcs_path": f"gs://{settings.gcs_outputs_bucket}/{blob_path}"}

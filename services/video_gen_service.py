@@ -188,7 +188,6 @@ def assemble_scene_video(audio_bytes: bytes, image_bytes: bytes) -> Optional[byt
         with open(wav_path, "wb") as f:
             f.write(audio_bytes)
 
-        # Get exact audio duration from WAV header
         with wave.open(wav_path, 'r') as wf:
             audio_duration = wf.getnframes() / wf.getframerate()
 
@@ -219,16 +218,33 @@ def assemble_scene_video(audio_bytes: bytes, image_bytes: bytes) -> Optional[byt
 
 # ── Chapter Video Assembly ──────────────────────────────────────────────────────
 
+_CJK_FONTS = [
+    "/usr/share/fonts/opentype/noto/NotoSerifCJKtc-Bold.otf",
+    "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.otf",
+    "/usr/share/fonts/truetype/arphic/uming.ttc",
+]
+
+def _format_srt_time(seconds: float) -> str:
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60
+    return f"{h:02d}:{m:02d}:{s:06.3f}".replace(".", ",")
+
+
 def assemble_chapter_video(
     order_id: str,
     chapter_index: int,
     scenes: list[dict],
     title: str = "",
-) -> Optional[bytes]:
-    """Assemble all scenes in a chapter into one MP4 with a title card.
+) -> tuple[Optional[bytes], str]:
+    """Assemble all scenes in a chapter into one MP4 + SRT subtitle file.
 
     Downloads audio + image for each scene from GCS temp bucket,
-    creates clips, concatenates, and returns MP4 bytes.
+    creates clips, concatenates into MP4, and generates an SRT with
+    narration text timed to each scene.
+
+    Returns (mp4_bytes, srt_content).
     """
     from google.cloud import storage
     from PIL import Image, ImageDraw, ImageFont
@@ -241,9 +257,12 @@ def assemble_chapter_video(
         concat_file = os.path.join(tmpdir, "concat.txt")
         clip_index = 0
         total_scenes = 0
+        srt_index = 1
+        cumulative_time = 0.0
+        srt_lines: list[str] = []
 
         with open(concat_file, "w") as cf:
-            # Title card
+            # ── Title card ──
             if title:
                 ZH_TITLES = {
                     0: "原始荒野", 1: "棍棒與利牙的法則", 2: "原始巨獸的統治",
@@ -254,10 +273,7 @@ def assemble_chapter_video(
                 img = Image.new("RGB", (W, H), (26, 26, 46))
                 draw = ImageDraw.Draw(img)
                 font_cjk = None
-                for p in ["/usr/share/fonts/opentype/noto/NotoSerifCJKtc-Bold.otf",
-                          "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc",
-                          "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.otf",
-                          "/usr/share/fonts/truetype/arphic/uming.ttc"]:
+                for p in _CJK_FONTS:
                     if os.path.exists(p):
                         font_cjk = ImageFont.truetype(p, 52)
                         break
@@ -289,8 +305,9 @@ def assemble_chapter_video(
                 ], desc=f"Title card ch{chapter_index + 1}")
                 cf.write(f"file '{title_mp4}'\n")
                 clip_index += 1
+                cumulative_time += 4
 
-            # Scene clips
+            # ── Scene clips ──
             for scene in sorted(scenes, key=lambda s: s["scene_index"]):
                 s_idx = scene["scene_index"]
                 wav_blob = bucket.blob(f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/narration.wav")
@@ -304,12 +321,11 @@ def assemble_chapter_video(
                 wav_blob.download_to_filename(wav_path)
                 jpg_blob.download_to_filename(jpg_path)
 
-                # Get exact audio duration from WAV header — ensures video clip matches precisely
                 with wave.open(wav_path, 'r') as wf:
                     audio_duration = wf.getnframes() / wf.getframerate()
+
                 _run_ffmpeg([
-                    "-loop", "1", "-i", jpg_path,
-                    "-i", wav_path,
+                    "-loop", "1", "-i", jpg_path, "-i", wav_path,
                     "-c:v", "libx264", "-tune", "stillimage", "-b:v", "2M",
                     "-c:a", "aac", "-b:a", "192k",
                     "-pix_fmt", "yuv420p",
@@ -320,22 +336,38 @@ def assemble_chapter_video(
                 clip_index += 1
                 total_scenes += 1
 
+                # SRT entry
+                narration = scene.get("narration_text", "").strip()
+                if narration:
+                    start_time = cumulative_time
+                    end_time = cumulative_time + audio_duration
+                    srt_lines.append(f"{srt_index}\n")
+                    srt_lines.append(f"{_format_srt_time(start_time)} --> {_format_srt_time(end_time)}\n")
+                    srt_lines.append(f"{narration}\n\n")
+                    srt_index += 1
+
+                cumulative_time += audio_duration
+
         if total_scenes == 0:
             logger.warning(f"No scenes with assets for chapter {chapter_index}")
-            return None
+            return None, ""
 
         output_path = os.path.join(tmpdir, f"chapter_{chapter_index:02d}.mp4")
         _run_ffmpeg([
             "-f", "concat", "-safe", "0",
             "-fflags", "+genpts",
             "-i", concat_file,
-            "-c", "copy", "-movflags", "+faststart", output_path,
+            "-c", "copy", "-movflags", "+faststart",
+            output_path,
         ], desc=f"Chapter {chapter_index} ({total_scenes} scenes)")
 
         with open(output_path, "rb") as f:
-            return f.read()
+            mp4_bytes = f.read()
+
+        srt_content = "".join(srt_lines)
+        return mp4_bytes, srt_content
     except Exception as e:
         logger.error(f"Chapter video assembly error: {e}")
-        return None
+        return None, ""
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
