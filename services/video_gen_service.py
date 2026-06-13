@@ -78,6 +78,35 @@ def synthesize_speech(text: str, voice_id: str = "cmn-TW-vs2-F04",
     return client.synthesize(text, voice_id=voice_id, speaking_rate=speaking_rate)
 
 
+# ── NVIDIA build.nvidia.com Image Generation ──────────────────────────────────
+
+_NVIDIA_FLUX_URL = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-schnell"
+
+
+def _nvidia_image(prompt: str) -> bytes:
+    """Generate image via NVIDIA build.nvidia.com NIM API with FLUX model."""
+    token = settings.nvidia_api_token
+    if not token:
+        raise ValueError("NVIDIA API token not configured")
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload = {
+        "prompt": prompt,
+        "mode": "base",
+        "seed": 0,
+        "steps": 4,
+    }
+    resp = requests.post(_NVIDIA_FLUX_URL, json=payload, headers=headers, timeout=120)
+    resp.raise_for_status()
+    data = resp.json()
+    artifacts = data.get("artifacts", [])
+    if not artifacts:
+        raise ValueError(f"NVIDIA no artifacts in response: {data}")
+    b64 = artifacts[0].get("base64")
+    if not b64:
+        raise ValueError(f"NVIDIA artifact missing base64: {artifacts[0]}")
+    return base64.b64decode(b64)
+
+
 # ── Hugging Face Image Generation ──────────────────────────────────────────────
 
 def _hf_image(prompt: str) -> bytes:
@@ -145,12 +174,17 @@ def _replicate_image(prompt: str) -> bytes:
 
 
 def generate_image(prompt: str) -> bytes:
-    """Generate image — tries Hugging Face first, falls back to Replicate."""
+    """Generate image — tries Hugging Face first, then NVIDIA, then Replicate."""
     if settings.hf_api_token:
         try:
             return _hf_image(prompt)
         except Exception as e:
-            logger.warning(f"HF image gen failed ({e}), falling back to Replicate")
+            logger.warning(f"HF image gen failed ({e})")
+    if settings.nvidia_api_token:
+        try:
+            return _nvidia_image(prompt)
+        except Exception as e:
+            logger.warning(f"NVIDIA image gen failed ({e}), falling back to Replicate")
     return _replicate_image(prompt)
 
 

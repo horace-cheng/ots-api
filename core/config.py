@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     # ── Replicate (fallback image gen) ─────────────────────────────────────
     replicate_api_token: str = os.environ.get("REPLICATE_API_TOKEN", "")
 
+    # ── NVIDIA build.nvidia.com (2nd fallback image gen) ───────────────────
+    nvidia_api_token: str = os.environ.get("NVIDIA_API_TOKEN", "")
+
     class Config:
         # 允許從 .env 檔載入（本機開發用）
         env_file = ".env"
