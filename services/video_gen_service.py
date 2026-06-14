@@ -82,17 +82,17 @@ class BronciTTSClient:
         self._expiration = __import__("time").time() + data.get("expiration", 3600)
 
     def synthesize(self, text: str, voice_id: str = "cmn-TW-vs2-F04",
-                   speaking_rate: float = 1.0) -> bytes:
+                   speaking_rate: float = 1.0,
+                   language_code: str = "cmn-TW") -> bytes:
         self._ensure_token()
         url = urljoin(self.base_url, "/api/v1/tts/synthesize")
         headers = {
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
         }
-        lang_code = "nan-TW" if voice_id.startswith("nan-") else "cmn-TW"
         payload = {
             "input": {"text": text, "textType": "common"},
-            "voice": {"model": "broncitts", "languageCode": lang_code, "name": voice_id},
+            "voice": {"model": "broncitts", "languageCode": language_code, "name": voice_id},
             "audioConfig": {"speakingRate": speaking_rate, "sampleRate": 16000},
             "outputConfig": {"streamMode": 0},
         }
@@ -102,14 +102,16 @@ class BronciTTSClient:
 
 
 def synthesize_speech(text: str, voice_id: str = "cmn-TW-vs2-F04",
-                      speaking_rate: float = 1.0) -> bytes:
+                      speaking_rate: float = 1.0,
+                      language_code: str = "cmn-TW") -> bytes:
     """Synthesize text to WAV bytes via BRONCI TTS."""
     client = BronciTTSClient(
         settings.bronci_username,
         settings.bronci_password,
         settings.bronci_base_url,
     )
-    return client.synthesize(text, voice_id=voice_id, speaking_rate=speaking_rate)
+    return client.synthesize(text, voice_id=voice_id, speaking_rate=speaking_rate,
+                             language_code=language_code)
 
 
 # ── NVIDIA build.nvidia.com Image Generation ──────────────────────────────────

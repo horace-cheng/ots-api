@@ -2252,8 +2252,11 @@ async def admin_scene_tts(
     if not language:
         language = "tai-lo" if voice_id.startswith("nan-") else "zh"
 
+    bronci_lang_code = "nan-TW" if language == "tai-lo" else "cmn-TW"
+
     from services.video_gen_service import synthesize_speech
-    wav_bytes = synthesize_speech(text, voice_id=voice_id, speaking_rate=speaking_rate)
+    wav_bytes = synthesize_speech(text, voice_id=voice_id, speaking_rate=speaking_rate,
+                                  language_code=bronci_lang_code)
     audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
     data_url = f"data:audio/wav;base64,{audio_b64}"
 
