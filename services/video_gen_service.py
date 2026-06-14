@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import os
+import random
 import shutil
 import subprocess
 import tempfile
@@ -92,7 +93,7 @@ def _nvidia_image(prompt: str) -> bytes:
     payload = {
         "prompt": prompt,
         "mode": "base",
-        "seed": 0,
+        "seed": random.randint(0, 2**31 - 1),
         "steps": 4,
     }
     resp = requests.post(_NVIDIA_FLUX_URL, json=payload, headers=headers, timeout=120)
@@ -101,12 +102,14 @@ def _nvidia_image(prompt: str) -> bytes:
     artifacts = data.get("artifacts", [])
     if not artifacts:
         raise ValueError(f"NVIDIA no artifacts in response: {data}")
+    finish = artifacts[0].get("finishReason", "")
+    if finish != "SUCCESS":
+        raise ValueError(f"NVIDIA finishReason={finish} — content may be filtered")
     b64 = artifacts[0].get("base64")
     if not b64:
         raise ValueError(f"NVIDIA artifact missing base64: {artifacts[0]}")
     img = base64.b64decode(b64)
     seed = artifacts[0].get("seed", "?")
-    finish = artifacts[0].get("finishReason", "?")
     logger.info(f"NVIDIA image gen succeeded — size={len(img)}B seed={seed} finish={finish} prompt={prompt[:60]}")
     return img
 
