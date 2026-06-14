@@ -2410,16 +2410,19 @@ async def admin_clean_video_assets(
     """Clean all generated video assets for an order, with optional backup.
 
     Request body:
-      backup: bool   — copy assets to backup_{timestamp}/ before deleting (default true)
-      language: str  — if provided, only clean assets for this track (e.g. 'zh' or 'tai-lo')
+      backup: bool          — copy assets to backup_{timestamp}/ before deleting (default true)
+      remove_materials: bool — also delete video_materials.json (default false)
+      language: str         — if provided, only clean assets for this track (e.g. 'zh' or 'tai-lo')
 
     Deletes:
+      - pipeline/{order_id}/video_materials.json (if remove_materials=true)
       - pipeline/{order_id}/scenes/** (narration.wav per scene, within language if specified)
       - pipeline/{order_id}/scenes/**/visual.jpg (shared — only when no language filter)
       - orders/{order_id}/chapter_*.mp4 (within language if specified)
       - orders/{order_id}/chapter_*.srt (within language if specified)
     """
     do_backup = body.get("backup", True)
+    remove_materials = body.get("remove_materials", False)
     language = body.get("language", "")
 
     from core.storage import get_storage_client
@@ -2432,10 +2435,21 @@ async def admin_clean_video_assets(
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     backup_prefix = f"pipeline/{order_id}/backup_{timestamp}/"
 
-    deleted = {"audio": 0, "image": 0, "video": 0, "srt": 0, "backup": 0}
+    deleted = {"audio": 0, "image": 0, "video": 0, "srt": 0, "materials": 0, "backup": 0}
 
     def _blobs_to_delete(bucket, prefix: str) -> list:
         return list(bucket.list_blobs(prefix=prefix))
+
+    # ── video_materials.json ──
+    materials_path = f"pipeline/{order_id}/video_materials.json"
+    materials_blob = temp_bucket.blob(materials_path)
+    if remove_materials and materials_blob.exists():
+        if do_backup:
+            new_name = backup_prefix + f"{order_id}/video_materials.json"
+            temp_bucket.copy_blob(materials_blob, temp_bucket, new_name)
+            deleted["backup"] += 1
+        materials_blob.delete()
+        deleted["materials"] = 1
 
     # ── Scene assets (temp bucket) ──
     scenes_prefix = f"pipeline/{order_id}/scenes/"
@@ -2482,6 +2496,7 @@ async def admin_clean_video_assets(
     return {
         "message": "Video assets cleaned",
         "backup_taken": do_backup,
+        "remove_materials": remove_materials,
         "backup_prefix": backup_prefix if do_backup else None,
         "deleted": deleted,
     }
