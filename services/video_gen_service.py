@@ -21,6 +21,38 @@ from core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# ── Target image dimensions (1280×720 = 720p, 16:9, YouTube-friendly) ──────────
+IMG_W, IMG_H = 1280, 720
+
+
+# ── Helper: resize + center-crop any image to target dimensions ────────────────
+
+def _resize_to_720p(image_bytes: bytes) -> bytes:
+    """Scale and center-crop image bytes to 1280×720, return JPEG bytes."""
+    from PIL import Image
+    import io
+    img = Image.open(io.BytesIO(image_bytes))
+    if img.size == (IMG_W, IMG_H):
+        return image_bytes
+    # Center-crop to 16:9 then scale
+    src_w, src_h = img.size
+    target_ratio = IMG_W / IMG_H
+    src_ratio = src_w / src_h
+    if src_ratio > target_ratio:
+        # Image is wider — crop width
+        new_w = int(src_h * target_ratio)
+        offset = (src_w - new_w) // 2
+        img = img.crop((offset, 0, offset + new_w, src_h))
+    elif src_ratio < target_ratio:
+        # Image is taller — crop height
+        new_h = int(src_w / target_ratio)
+        offset = (src_h - new_h) // 2
+        img = img.crop((0, offset, src_w, offset + new_h))
+    img = img.resize((IMG_W, IMG_H), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=92)
+    return buf.getvalue()
+
 
 # ── BRONCI TTS ─────────────────────────────────────────────────────────────────
 
@@ -95,6 +127,8 @@ def _nvidia_image(prompt: str) -> bytes:
         "mode": "base",
         "seed": random.randint(0, 2**31 - 1),
         "steps": 4,
+        "width": IMG_W,
+        "height": 768,  # NVIDIA requires 768/832/896/960/1024/1088/1152/1216/1280/1344
     }
     resp = requests.post(_NVIDIA_FLUX_URL, json=payload, headers=headers, timeout=120)
     resp.raise_for_status()
@@ -109,6 +143,7 @@ def _nvidia_image(prompt: str) -> bytes:
     if not b64:
         raise ValueError(f"NVIDIA artifact missing base64: {artifacts[0]}")
     img = base64.b64decode(b64)
+    img = _resize_to_720p(img)
     seed = artifacts[0].get("seed", "?")
     logger.info(f"NVIDIA image gen succeeded — size={len(img)}B seed={seed} finish={finish} prompt={prompt[:60]}")
     return img
@@ -124,8 +159,8 @@ def _hf_image(prompt: str) -> bytes:
         "inputs": prompt,
         "parameters": {
             "negative_prompt": "blurry, low quality, distorted, text, watermark, signature",
-            "width": 1024,
-            "height": 576,
+            "width": IMG_W,
+            "height": IMG_H,
             "num_inference_steps": 4,
         },
     }
@@ -135,6 +170,7 @@ def _hf_image(prompt: str) -> bytes:
     if "image" not in content_type:
         raise ValueError(f"HF unexpected response type: {content_type}")
     img = resp.content
+    img = _resize_to_720p(img)
     logger.info(f"HF image gen succeeded — size={len(img)}B type={content_type} model={settings.hf_image_model} prompt={prompt[:60]}")
     return img
 
@@ -178,6 +214,7 @@ def _replicate_image(prompt: str) -> bytes:
                 img_r = requests.get(output[0], timeout=60)
                 img_r.raise_for_status()
                 img = img_r.content
+                img = _resize_to_720p(img)
                 model_ver = pr_data.get("version", "?")
                 logger.info(f"Replicate image gen succeeded — size={len(img)}B pred_id={pred_id} model_version={model_ver} prompt={prompt[:60]}")
                 return img
@@ -317,7 +354,7 @@ def assemble_chapter_video(
                     3: "誰奪得主權", 4: "拖繩與道路的苦役", 5: "為了對一個人的愛",
                     6: "呼喚的聲音",
                 }
-                W, H = 1024, 576
+                W, H = IMG_W, IMG_H
                 img = Image.new("RGB", (W, H), (26, 26, 46))
                 draw = ImageDraw.Draw(img)
                 font_cjk = None
