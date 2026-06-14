@@ -104,7 +104,11 @@ def _nvidia_image(prompt: str) -> bytes:
     b64 = artifacts[0].get("base64")
     if not b64:
         raise ValueError(f"NVIDIA artifact missing base64: {artifacts[0]}")
-    return base64.b64decode(b64)
+    img = base64.b64decode(b64)
+    seed = artifacts[0].get("seed", "?")
+    finish = artifacts[0].get("finishReason", "?")
+    logger.info(f"NVIDIA image gen succeeded — size={len(img)}B seed={seed} finish={finish} prompt={prompt[:60]}")
+    return img
 
 
 # ── Hugging Face Image Generation ──────────────────────────────────────────────
@@ -127,7 +131,9 @@ def _hf_image(prompt: str) -> bytes:
     content_type = resp.headers.get("Content-Type", "")
     if "image" not in content_type:
         raise ValueError(f"HF unexpected response type: {content_type}")
-    return resp.content
+    img = resp.content
+    logger.info(f"HF image gen succeeded — size={len(img)}B type={content_type} model={settings.hf_image_model} prompt={prompt[:60]}")
+    return img
 
 
 _REPLICATE_API = "https://api.replicate.com/v1/models"
@@ -155,21 +161,26 @@ def _replicate_image(prompt: str) -> bytes:
     )
     r.raise_for_status()
     pred = r.json()
-    poll_url = pred.get("urls", {}).get("get", f"{_REPLICATE_POLL}/{pred['id']}")
+    pred_id = pred.get("id", "?")
+    poll_url = pred.get("urls", {}).get("get", f"{_REPLICATE_POLL}/{pred_id}")
     for _ in range(60):
         time.sleep(2)
         pr = requests.get(poll_url, headers=headers, timeout=30)
         pr.raise_for_status()
-        status = pr.json().get("status")
+        pr_data = pr.json()
+        status = pr_data.get("status")
         if status == "succeeded":
-            output = pr.json().get("output")
+            output = pr_data.get("output")
             if isinstance(output, list) and output:
                 img_r = requests.get(output[0], timeout=60)
                 img_r.raise_for_status()
-                return img_r.content
+                img = img_r.content
+                model_ver = pr_data.get("version", "?")
+                logger.info(f"Replicate image gen succeeded — size={len(img)}B pred_id={pred_id} model_version={model_ver} prompt={prompt[:60]}")
+                return img
             raise ValueError(f"Replicate no output: {output}")
         if status == "failed":
-            raise ValueError(f"Replicate prediction failed")
+            raise ValueError(f"Replicate prediction failed: {pr_data.get('error', 'unknown')}")
     raise TimeoutError("Replicate prediction timed out")
 
 
