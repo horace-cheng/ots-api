@@ -2130,22 +2130,25 @@ async def admin_get_video_materials(
     except json.JSONDecodeError:
         raise HTTPException(500, "Invalid video_materials.json")
 
-    # Check for existing scene assets
+    # Check for existing scene assets (per-language track)
     scene_assets = {}
     chapters = materials.get("chapters", [])
     for ch in chapters:
         ch_idx = ch["chapter_index"]
         for scene in ch.get("scenes", []):
             s_idx = scene["scene_index"]
-            key = f"{ch_idx}_{s_idx}"
-            entry = {"audio_url": None, "image_url": None}
-            audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/narration.wav"
-            image_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/visual.jpg"
-            if temp_bucket.blob(audio_path).exists():
-                entry["audio_url"] = generate_signed_url(settings.gcs_temp_bucket, audio_path)
-            if temp_bucket.blob(image_path).exists():
-                entry["image_url"] = generate_signed_url(settings.gcs_temp_bucket, image_path)
-            scene_assets[key] = entry
+            tracks = scene.get("tracks", {})
+            languages = list(tracks.keys()) if tracks else ["zh"]
+            for lang in languages:
+                key = f"{ch_idx}_{s_idx}_{lang}"
+                entry = {"audio_url": None, "image_url": None}
+                audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{lang}/narration.wav"
+                image_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/visual.jpg"
+                if temp_bucket.blob(audio_path).exists():
+                    entry["audio_url"] = generate_signed_url(settings.gcs_temp_bucket, audio_path)
+                if temp_bucket.blob(image_path).exists():
+                    entry["image_url"] = generate_signed_url(settings.gcs_temp_bucket, image_path)
+                scene_assets[key] = entry
 
     # Check for existing chapter videos & SRTs
     chapter_videos = {}
@@ -2230,26 +2233,35 @@ async def admin_scene_tts(
     admin: dict        = Depends(get_admin_user),
     db:   AsyncSession = Depends(get_db),
 ):
-    """Generate TTS audio for a single scene."""
+    """Generate TTS audio for a single scene.
+
+    Stores audio at `scenes/{ch_idx}_{s_idx}/{language}/narration.wav`
+    so each language track has its own audio file.
+    """
     ch_idx = body.get("chapter_index")
     s_idx = body.get("scene_index")
     text = body.get("text", "")
     voice_id = body.get("voice_id", "cmn-TW-vs2-F04")
     speaking_rate = body.get("speaking_rate", 1.0)
+    language = body.get("language", "")
 
     if ch_idx is None or s_idx is None or not text:
         raise HTTPException(400, "chapter_index, scene_index, and text are required")
+
+    # Infer language from voice_id if not explicitly provided
+    if not language:
+        language = "tai-lo" if voice_id.startswith("nan-") else "zh"
 
     from services.video_gen_service import synthesize_speech
     wav_bytes = synthesize_speech(text, voice_id=voice_id, speaking_rate=speaking_rate)
     audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
     data_url = f"data:audio/wav;base64,{audio_b64}"
 
-    # Also persist to GCS for later use
+    # Persist to GCS with language in path
     from core.storage import get_storage_client
     client = get_storage_client()
     bucket = client.bucket(settings.gcs_temp_bucket)
-    blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/narration.wav"
+    blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/narration.wav"
     bucket.blob(blob_path).upload_from_string(wav_bytes, content_type="audio/wav")
 
     return {"audio_data_url": data_url, "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}"}
@@ -2337,8 +2349,13 @@ async def admin_chapter_assemble(
     admin: dict        = Depends(get_admin_user),
     db:   AsyncSession = Depends(get_db),
 ):
-    """Assemble all scenes in a chapter into one MP4 with a title card."""
+    """Assemble all scenes in a chapter into one MP4 with a title card.
+
+    The `language` param selects which narration track to use
+    for SRT subtitles and audio assets. Defaults to 'zh'.
+    """
     ch_idx = body.get("chapter_index")
+    language = body.get("language", "zh")
     if ch_idx is None:
         raise HTTPException(400, "chapter_index is required")
 
@@ -2362,16 +2379,17 @@ async def admin_chapter_assemble(
         chapter_index=ch_idx,
         scenes=chapter.get("scenes", []),
         title=chapter.get("title", ""),
+        language=language,
     )
     if mp4_bytes is None:
         raise HTTPException(500, "Chapter assembly failed — generate audio + image for all scenes first")
 
     out_bucket = client.bucket(settings.gcs_outputs_bucket)
-    blob_path = f"orders/{order_id}/chapter_{ch_idx:02d}.mp4"
+    blob_path = f"orders/{order_id}/chapter_{ch_idx:02d}_{language}.mp4"
     out_bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
 
     # Upload SRT alongside the video
-    srt_path = f"orders/{order_id}/chapter_{ch_idx:02d}.srt"
+    srt_path = f"orders/{order_id}/chapter_{ch_idx:02d}_{language}.srt"
     if srt_content:
         out_bucket.blob(srt_path).upload_from_string(srt_content, content_type="text/plain; charset=utf-8")
 
@@ -2382,6 +2400,93 @@ async def admin_chapter_assemble(
     return {"video_url": video_url, "srt_url": srt_url, "gcs_path": f"gs://{settings.gcs_outputs_bucket}/{blob_path}"}
 
 
+@router.post("/orders/{order_id}/video-materials/clean")
+async def admin_clean_video_assets(
+    order_id: str,
+    body: dict,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Clean all generated video assets for an order, with optional backup.
+
+    Request body:
+      backup: bool   — copy assets to backup_{timestamp}/ before deleting (default true)
+      language: str  — if provided, only clean assets for this track (e.g. 'zh' or 'tai-lo')
+
+    Deletes:
+      - pipeline/{order_id}/scenes/** (narration.wav per scene, within language if specified)
+      - pipeline/{order_id}/scenes/**/visual.jpg (shared — only when no language filter)
+      - orders/{order_id}/chapter_*.mp4 (within language if specified)
+      - orders/{order_id}/chapter_*.srt (within language if specified)
+    """
+    do_backup = body.get("backup", True)
+    language = body.get("language", "")
+
+    from core.storage import get_storage_client
+    from datetime import datetime
+
+    client = get_storage_client()
+    temp_bucket = client.bucket(settings.gcs_temp_bucket)
+    out_bucket = client.bucket(settings.gcs_outputs_bucket)
+
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    backup_prefix = f"pipeline/{order_id}/backup_{timestamp}/"
+
+    deleted = {"audio": 0, "image": 0, "video": 0, "srt": 0, "backup": 0}
+
+    def _blobs_to_delete(bucket, prefix: str) -> list:
+        return list(bucket.list_blobs(prefix=prefix))
+
+    # ── Scene assets (temp bucket) ──
+    scenes_prefix = f"pipeline/{order_id}/scenes/"
+    scene_blobs = _blobs_to_delete(temp_bucket, scenes_prefix)
+
+    if language:
+        # Filter to specific language track
+        scene_blobs = [b for b in scene_blobs if f"/{language}/narration.wav" in b.name]
+
+    for blob in scene_blobs:
+        if do_backup:
+            new_name = backup_prefix + blob.name[len(f"pipeline/{order_id}/"):]
+            temp_bucket.copy_blob(blob, temp_bucket, new_name)
+            deleted["backup"] += 1
+        blob.delete()
+        if blob.name.endswith("narration.wav"):
+            deleted["audio"] += 1
+        elif blob.name.endswith("visual.jpg"):
+            deleted["image"] += 1
+
+    # ── Chapter videos and SRTs (outputs bucket) ──
+    out_prefix = f"orders/{order_id}/chapter_"
+    out_blobs = _blobs_to_delete(out_bucket, out_prefix)
+
+    if language:
+        out_blobs = [b for b in out_blobs if f"_{language}." in b.name]
+
+    for blob in out_blobs:
+        if do_backup:
+            new_name = backup_prefix + blob.name[len(f"orders/{order_id}/"):]
+            out_bucket.copy_blob(blob, out_bucket, new_name)
+            deleted["backup"] += 1
+        blob.delete()
+        if blob.name.endswith(".mp4"):
+            deleted["video"] += 1
+        elif blob.name.endswith(".srt"):
+            deleted["srt"] += 1
+
+    logger.info(
+        f"Clean video assets: order={order_id} lang={language or 'all'} "
+        f"audio={deleted['audio']} image={deleted['image']} "
+        f"video={deleted['video']} srt={deleted['srt']} backup={deleted['backup']}"
+    )
+    return {
+        "message": "Video assets cleaned",
+        "backup_taken": do_backup,
+        "backup_prefix": backup_prefix if do_backup else None,
+        "deleted": deleted,
+    }
+
+
 @router.put("/orders/{order_id}/video-materials/chapter/srt")
 async def admin_save_chapter_srt(
     order_id: str,
@@ -2389,8 +2494,9 @@ async def admin_save_chapter_srt(
     admin: dict        = Depends(get_admin_user),
     db:   AsyncSession = Depends(get_db),
 ):
-    """Save edited SRT content for a chapter."""
+    """Save edited SRT content for a chapter (language-aware path)."""
     ch_idx = body.get("chapter_index")
+    language = body.get("language", "zh")
     srt_content = body.get("srt_content")
     if ch_idx is None or srt_content is None:
         raise HTTPException(400, "chapter_index and srt_content are required")
@@ -2398,7 +2504,7 @@ async def admin_save_chapter_srt(
     from core.storage import get_storage_client, generate_signed_url
     client = get_storage_client()
     out_bucket = client.bucket(settings.gcs_outputs_bucket)
-    srt_path = f"orders/{order_id}/chapter_{ch_idx:02d}.srt"
+    srt_path = f"orders/{order_id}/chapter_{ch_idx:02d}_{language}.srt"
     out_bucket.blob(srt_path).upload_from_string(srt_content, content_type="text/plain; charset=utf-8")
     srt_url = generate_signed_url(settings.gcs_outputs_bucket, srt_path)
     return {"srt_url": srt_url}

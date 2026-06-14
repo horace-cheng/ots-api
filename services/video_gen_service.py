@@ -322,6 +322,7 @@ def assemble_chapter_video(
     chapter_index: int,
     scenes: list[dict],
     title: str = "",
+    language: str = "zh",
 ) -> tuple[Optional[bytes], str]:
     """Assemble all scenes in a chapter into one MP4 + SRT subtitle file.
 
@@ -329,7 +330,8 @@ def assemble_chapter_video(
     creates clips, concatenates into MP4, and generates an SRT with
     narration text timed to each scene.
 
-    Returns (mp4_bytes, srt_content).
+    The `language` param selects which narration track to use (e.g. 'zh'
+    or 'tai-lo') for both SRT text and audio asset paths.
     """
     from google.cloud import storage
     from PIL import Image, ImageDraw, ImageFont
@@ -395,7 +397,7 @@ def assemble_chapter_video(
             # ── Scene clips ──
             for scene in sorted(scenes, key=lambda s: s["scene_index"]):
                 s_idx = scene["scene_index"]
-                wav_blob = bucket.blob(f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/narration.wav")
+                wav_blob = bucket.blob(f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/{language}/narration.wav")
                 jpg_blob = bucket.blob(f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/visual.jpg")
                 if not wav_blob.exists() or not jpg_blob.exists():
                     continue
@@ -421,8 +423,12 @@ def assemble_chapter_video(
                 clip_index += 1
                 total_scenes += 1
 
-                # SRT entry
-                narration = scene.get("narration_text", "").strip()
+                # SRT entry — read narration from the correct track
+                tracks = scene.get("tracks", {})
+                if language in tracks:
+                    narration = tracks[language].get("narration_text", "").strip()
+                else:
+                    narration = scene.get("narration_text", "").strip()
                 if narration:
                     start_time = cumulative_time
                     end_time = cumulative_time + audio_duration
