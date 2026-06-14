@@ -89,9 +89,10 @@ class BronciTTSClient:
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
         }
+        lang_code = "nan-TW" if voice_id.startswith("nan-") else "cmn-TW"
         payload = {
             "input": {"text": text, "textType": "common"},
-            "voice": {"model": "broncitts", "languageCode": "cmn-TW", "name": voice_id},
+            "voice": {"model": "broncitts", "languageCode": lang_code, "name": voice_id},
             "audioConfig": {"speakingRate": speaking_rate, "sampleRate": 16000},
             "outputConfig": {"streamMode": 0},
         }
