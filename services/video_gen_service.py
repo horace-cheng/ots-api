@@ -91,7 +91,7 @@ class BronciTTSClient:
             "Content-Type": "application/json",
         }
         payload = {
-            "input": {"text": text, "textType": "common"},
+            "input": {"text": text, "textType": "characters"},
             "voice": {"model": "broncitts", "languageCode": language_code, "name": voice_id},
             "audioConfig": {"speakingRate": speaking_rate, "sampleRate": 16000},
             "outputConfig": {"streamMode": 0},
@@ -354,11 +354,6 @@ def assemble_chapter_video(
         with open(concat_file, "w") as cf:
             # ── Title card ──
             if title:
-                ZH_TITLES = {
-                    0: "原始荒野", 1: "棍棒與利牙的法則", 2: "原始巨獸的統治",
-                    3: "誰奪得主權", 4: "拖繩與道路的苦役", 5: "為了對一個人的愛",
-                    6: "呼喚的聲音",
-                }
                 W, H = IMG_W, IMG_H
                 img = Image.new("RGB", (W, H), (26, 26, 46))
                 draw = ImageDraw.Draw(img)
@@ -377,7 +372,7 @@ def assemble_chapter_video(
                     font_cjk = ImageFont.load_default()
                 if font_en is None:
                     font_en = ImageFont.load_default()
-                zh = ZH_TITLES.get(chapter_index, title)
+                zh = title
                 _, _, tw, _ = draw.textbbox((0, 0), f"Chapter {chapter_index + 1}", font=font_en)
                 draw.text(((W - tw) / 2, H * 0.32), f"Chapter {chapter_index + 1}", fill=(180, 180, 200), font=font_en)
                 _, _, tw, _ = draw.textbbox((0, 0), zh, font=font_cjk)
