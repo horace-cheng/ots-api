@@ -2300,6 +2300,88 @@ async def admin_scene_image(
     return {"image_data_url": data_url, "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}"}
 
 
+@router.post("/orders/{order_id}/video-materials/scene/retranslate")
+async def admin_scene_retranslate(
+    order_id: str,
+    body: dict,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Re-translate a single scene's Chinese narration to Tai-lo.
+
+    Reads the scene's `tracks.zh.narration_text`, calls Gemini for Tai-lo
+    translation, updates `tracks["tai-lo"].narration_text` in place, and
+    clears the stale Tai-lo audio asset so it gets regenerated on next TTS.
+    """
+    ch_idx = body.get("chapter_index")
+    s_idx = body.get("scene_index")
+    if ch_idx is None or s_idx is None:
+        raise HTTPException(400, "chapter_index and scene_index are required")
+
+    row = await db.execute(
+        text("SELECT track_type FROM orders WHERE id = :id"),
+        {"id": order_id},
+    )
+    r = row.fetchone()
+    if not r:
+        raise HTTPException(404, "Order not found")
+    if r.track_type != "gutenberg":
+        raise HTTPException(400, "Video materials are only for Gutenberg orders")
+
+    from core.storage import get_storage_client
+
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+    blob = bucket.blob(f"pipeline/{order_id}/video_materials.json")
+    if not blob.exists():
+        raise HTTPException(404, "video_materials.json not found — generate storyboard first")
+
+    materials = json.loads(blob.download_as_text(encoding="utf-8"))
+    chapters = materials.get("chapters", [])
+    scene = None
+    for ch in chapters:
+        if ch["chapter_index"] == ch_idx:
+            for sc in ch.get("scenes", []):
+                if sc["scene_index"] == s_idx:
+                    scene = sc
+                    break
+            break
+
+    if scene is None:
+        raise HTTPException(404, f"Scene {ch_idx}.{s_idx} not found")
+
+    tracks = scene.get("tracks", {})
+    zh_text = tracks.get("zh", {}).get("narration_text", "")
+    if not zh_text:
+        raise HTTPException(400, "Chinese narration text is empty — nothing to translate")
+
+    from services.tai_lo_translator import translate_to_tai_lo
+
+    tai_lo_text = translate_to_tai_lo(zh_text)
+
+    if "tai-lo" not in tracks:
+        tracks["tai-lo"] = {}
+    tracks["tai-lo"]["narration_text"] = tai_lo_text
+    scene["tracks"] = tracks
+
+    # Mark tracks as modified for auto-save detection
+    blob.upload_from_string(
+        json.dumps(materials, ensure_ascii=False),
+        content_type="application/json; charset=utf-8",
+    )
+
+    # Clear stale Tai-lo audio asset so it gets regenerated
+    audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/tai-lo/narration.wav"
+    audio_blob = bucket.blob(audio_path)
+    if audio_blob.exists():
+        audio_blob.delete()
+
+    logger.info(
+        f"Scene {ch_idx}.{s_idx} retranslated: zh={len(zh_text)} chars → tai-lo={len(tai_lo_text)} chars"
+    )
+    return {"tai_lo_text": tai_lo_text}
+
+
 @router.post("/orders/{order_id}/video-materials/scene/assemble")
 async def admin_scene_assemble(
     order_id: str,

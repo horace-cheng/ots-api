@@ -2,6 +2,7 @@ FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH="/app/ots-common:$PYTHONPATH"
 
 # Video assembly 需要 FFmpeg
 # 只下載 NotoSerifCJKtc-Bold.otf（~15MB），不定義龐大的 fonts-noto-cjk（~200MB）

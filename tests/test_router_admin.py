@@ -2076,3 +2076,136 @@ class TestGutenbergChapters:
             resp = admin_client.get("/admin/gutenberg/ORDER-001/chapters?chapter=0")
         assert resp.status_code == 200
         assert resp.json()["segments"] == []
+
+
+class TestAdminSceneRetranslate:
+    """Tests for POST /admin/orders/{id}/video-materials/scene/retranslate"""
+
+    VIDEO_MATERIALS = {
+        "chapters": [{
+            "chapter_index": 0,
+            "title": "Chapter 1",
+            "scenes": [{
+                "scene_index": 0,
+                "visual_prompt": "A sunny day",
+                "duration_est": "15s",
+                "tracks": {
+                    "zh": {"narration_text": "今天是個好天氣"},
+                    "tai-lo": {"narration_text": "今仔日是好天氣"},
+                },
+            }],
+        }],
+    }
+
+    def test_order_not_found_returns_404(self, admin_client, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+        resp = admin_client.post(
+            "/admin/orders/nonexistent/video-materials/scene/retranslate",
+            json={"chapter_index": 0, "scene_index": 0},
+        )
+        assert resp.status_code == 404
+
+    def test_non_gutenberg_returns_400(self, admin_client, mock_db):
+        row = MagicMock()
+        row.track_type = "fast"
+        mock_db.execute.return_value.fetchone.return_value = row
+        resp = admin_client.post(
+            "/admin/orders/order-001/video-materials/scene/retranslate",
+            json={"chapter_index": 0, "scene_index": 0},
+        )
+        assert resp.status_code == 400
+
+    def test_missing_materials_returns_404(self, admin_client, mock_db):
+        row = MagicMock()
+        row.track_type = "gutenberg"
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        with patch("routers.admin.storage.get_storage_client") as mc:
+            client = MagicMock()
+            bucket = MagicMock()
+            blob = MagicMock()
+            blob.exists.return_value = False
+            bucket.blob.return_value = blob
+            client.bucket.return_value = bucket
+            mc.return_value = client
+
+            resp = admin_client.post(
+                "/admin/orders/order-001/video-materials/scene/retranslate",
+                json={"chapter_index": 0, "scene_index": 0},
+            )
+        assert resp.status_code == 404
+
+    def test_success_retranslates_scene(self, admin_client, mock_db):
+        row = MagicMock()
+        row.track_type = "gutenberg"
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        with patch("routers.admin.storage.get_storage_client") as mc, \
+             patch("services.tai_lo_translator.translate_to_tai_lo") as mock_translate:
+            mock_translate.return_value = "今仔日是誠好的天氣"
+
+            client = MagicMock()
+            bucket = MagicMock()
+
+            # Materials blob: exists, returns JSON
+            materials_blob = MagicMock()
+            materials_blob.exists.return_value = True
+            materials_blob.download_as_text.return_value = json.dumps(self.VIDEO_MATERIALS)
+
+            # Audio blob: exists, gets deleted
+            audio_blob = MagicMock()
+            audio_blob.exists.return_value = True
+
+            def blob_for(path):
+                if path.endswith("video_materials.json"):
+                    return materials_blob
+                if path.endswith("narration.wav"):
+                    return audio_blob
+                return MagicMock()
+
+            bucket.blob.side_effect = blob_for
+            client.bucket.return_value = bucket
+            mc.return_value = client
+
+            resp = admin_client.post(
+                "/admin/orders/order-001/video-materials/scene/retranslate",
+                json={"chapter_index": 0, "scene_index": 0},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["tai_lo_text"] == "今仔日是誠好的天氣"
+        mock_translate.assert_called_once_with("今天是個好天氣")
+        materials_blob.upload_from_string.assert_called_once()
+        audio_blob.delete.assert_called_once()
+
+    def test_empty_zh_narration_returns_400(self, admin_client, mock_db):
+        row = MagicMock()
+        row.track_type = "gutenberg"
+        mock_db.execute.return_value.fetchone.return_value = row
+
+        empty_materials = {
+            "chapters": [{
+                "chapter_index": 0,
+                "scenes": [{
+                    "scene_index": 0,
+                    "tracks": {"zh": {"narration_text": ""}},
+                }],
+            }],
+        }
+
+        with patch("routers.admin.storage.get_storage_client") as mc:
+            client = MagicMock()
+            bucket = MagicMock()
+            blob = MagicMock()
+            blob.exists.return_value = True
+            blob.download_as_text.return_value = json.dumps(empty_materials)
+            bucket.blob.return_value = blob
+            client.bucket.return_value = bucket
+            mc.return_value = client
+
+            resp = admin_client.post(
+                "/admin/orders/order-001/video-materials/scene/retranslate",
+                json={"chapter_index": 0, "scene_index": 0},
+            )
+        assert resp.status_code == 400
