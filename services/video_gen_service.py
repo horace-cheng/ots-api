@@ -83,7 +83,9 @@ class BronciTTSClient:
 
     def synthesize(self, text: str, voice_id: str = "cmn-TW-vs2-F04",
                    speaking_rate: float = 1.0,
-                   language_code: str = "cmn-TW") -> bytes:
+                   language_code: str = "cmn-TW",
+                   short_pause_duration: int = 150,
+                   long_pause_duration: int = 450) -> bytes:
         self._ensure_token()
         url = urljoin(self.base_url, "/api/v1/tts/synthesize")
         headers = {
@@ -93,7 +95,12 @@ class BronciTTSClient:
         payload = {
             "input": {"text": text, "textType": "characters"},
             "voice": {"model": "broncitts", "languageCode": language_code, "name": voice_id},
-            "audioConfig": {"speakingRate": speaking_rate, "sampleRate": 16000},
+            "audioConfig": {
+                "speakingRate": speaking_rate,
+                "sampleRate": 16000,
+                "shortPauseDuration": short_pause_duration,
+                "longPauseDuration": long_pause_duration,
+            },
             "outputConfig": {"streamMode": 0},
         }
         resp = requests.post(url, json=payload, headers=headers, timeout=120)
@@ -103,7 +110,9 @@ class BronciTTSClient:
 
 def synthesize_speech(text: str, voice_id: str = "cmn-TW-vs2-F04",
                       speaking_rate: float = 1.0,
-                      language_code: str = "cmn-TW") -> bytes:
+                      language_code: str = "cmn-TW",
+                      short_pause_duration: int = 150,
+                      long_pause_duration: int = 450) -> bytes:
     """Synthesize text to WAV bytes via BRONCI TTS."""
     client = BronciTTSClient(
         settings.bronci_username,
@@ -111,7 +120,9 @@ def synthesize_speech(text: str, voice_id: str = "cmn-TW-vs2-F04",
         settings.bronci_base_url,
     )
     return client.synthesize(text, voice_id=voice_id, speaking_rate=speaking_rate,
-                             language_code=language_code)
+                             language_code=language_code,
+                             short_pause_duration=short_pause_duration,
+                             long_pause_duration=long_pause_duration)
 
 
 # ── NVIDIA build.nvidia.com Image Generation ──────────────────────────────────

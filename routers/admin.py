@@ -2244,6 +2244,8 @@ async def admin_scene_tts(
     voice_id = body.get("voice_id", "cmn-TW-vs2-F04")
     speaking_rate = body.get("speaking_rate", 1.0)
     language = body.get("language", "")
+    short_pause_duration = body.get("short_pause_duration", 150)
+    long_pause_duration = body.get("long_pause_duration", 450)
 
     if ch_idx is None or s_idx is None or not text:
         raise HTTPException(400, "chapter_index, scene_index, and text are required")
@@ -2256,7 +2258,9 @@ async def admin_scene_tts(
 
     from services.video_gen_service import synthesize_speech
     wav_bytes = synthesize_speech(text, voice_id=voice_id, speaking_rate=speaking_rate,
-                                  language_code=bronci_lang_code)
+                                  language_code=bronci_lang_code,
+                                  short_pause_duration=short_pause_duration,
+                                  long_pause_duration=long_pause_duration)
     audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
     data_url = f"data:audio/wav;base64,{audio_b64}"
 
