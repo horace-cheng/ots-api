@@ -11,7 +11,7 @@ steps:
     entrypoint: bash
     env:
       - DB_URL=postgresql+asyncpg://test:test@localhost/test
-      - PYTHONPATH=ots-common:$PYTHONPATH
+      - PYTHONPATH=ots-common:$$PYTHONPATH
     args:
       - -c
       - pip install -r requirements.txt -r requirements-dev.txt && pytest
