@@ -2141,11 +2141,19 @@ async def admin_get_video_materials(
             languages = list(tracks.keys()) if tracks else ["zh"]
             for lang in languages:
                 key = f"{ch_idx}_{s_idx}_{lang}"
-                entry = {"audio_url": None, "image_url": None}
+                entry = {"audio_url": None, "image_url": None, "audio_duration": None}
                 audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{lang}/narration.wav"
-                image_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/visual.jpg"
-                if temp_bucket.blob(audio_path).exists():
+                audio_blob = temp_bucket.blob(audio_path)
+                if audio_blob.exists():
                     entry["audio_url"] = generate_signed_url(settings.gcs_temp_bucket, audio_path)
+                    try:
+                        import io
+                        import wave as wave_mod
+                        wav_bytes = audio_blob.download_as_bytes()
+                        with wave_mod.open(io.BytesIO(wav_bytes), 'r') as wf:
+                            entry["audio_duration"] = round(wf.getnframes() / wf.getframerate(), 2)
+                    except Exception:
+                        entry["audio_duration"] = None
                 if temp_bucket.blob(image_path).exists():
                     entry["image_url"] = generate_signed_url(settings.gcs_temp_bucket, image_path)
                 scene_assets[key] = entry
