@@ -2141,7 +2141,7 @@ async def admin_get_video_materials(
             languages = list(tracks.keys()) if tracks else ["zh"]
             for lang in languages:
                 key = f"{ch_idx}_{s_idx}_{lang}"
-                entry = {"audio_url": None, "audio_duration": None}
+                entry = {"audio_url": None, "audio_duration": None, "video_url": None}
                 audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{lang}/narration.wav"
                 audio_blob = temp_bucket.blob(audio_path)
                 if audio_blob.exists():
@@ -2154,6 +2154,9 @@ async def admin_get_video_materials(
                             entry["audio_duration"] = round(wf.getnframes() / wf.getframerate(), 2)
                     except Exception:
                         entry["audio_duration"] = None
+                video_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{lang}/scene_video.mp4"
+                if temp_bucket.blob(video_path).exists():
+                    entry["video_url"] = generate_signed_url(settings.gcs_temp_bucket, video_path)
                 scene_assets[key] = entry
 
     # Check for existing chapter videos & SRTs
