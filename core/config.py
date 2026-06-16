@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     # ── NVIDIA build.nvidia.com (2nd fallback image gen) ───────────────────
     nvidia_api_token: str = os.environ.get("NVIDIA_API_TOKEN", "")
 
+    # ── fal.ai (LTX 2.3 Fast video gen) ─────────────────────────────────────
+    fal_api_key: str = os.environ.get("FAL_API_KEY", "")
+
     class Config:
         # 允許從 .env 檔載入（本機開發用）
         env_file = ".env"

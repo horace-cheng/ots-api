@@ -2261,6 +2261,13 @@ async def admin_scene_tts(
                                   language_code=bronci_lang_code,
                                   short_pause_duration=short_pause_duration,
                                   long_pause_duration=long_pause_duration)
+
+    # Compute duration from WAV header
+    import io
+    import wave as wave_mod
+    with wave_mod.open(io.BytesIO(wav_bytes), 'r') as wf:
+        duration_sec = round(wf.getnframes() / wf.getframerate(), 2)
+
     audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
     data_url = f"data:audio/wav;base64,{audio_b64}"
 
@@ -2271,7 +2278,11 @@ async def admin_scene_tts(
     blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/narration.wav"
     bucket.blob(blob_path).upload_from_string(wav_bytes, content_type="audio/wav")
 
-    return {"audio_data_url": data_url, "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}"}
+    return {
+        "audio_data_url": data_url,
+        "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}",
+        "duration_sec": duration_sec,
+    }
 
 
 @router.post("/orders/{order_id}/video-materials/scene/image")
@@ -2478,6 +2489,154 @@ async def admin_chapter_assemble(
     out_bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
 
     # Upload SRT alongside the video
+    srt_path = f"orders/{order_id}/chapter_{ch_idx:02d}_{language}.srt"
+    if srt_content:
+        out_bucket.blob(srt_path).upload_from_string(srt_content, content_type="text/plain; charset=utf-8")
+
+    from core.storage import generate_signed_url
+    video_url = generate_signed_url(settings.gcs_outputs_bucket, blob_path)
+    srt_url = generate_signed_url(settings.gcs_outputs_bucket, srt_path) if srt_content else None
+
+    return {"video_url": video_url, "srt_url": srt_url, "gcs_path": f"gs://{settings.gcs_outputs_bucket}/{blob_path}"}
+
+
+@router.post("/orders/{order_id}/video-materials/scene/video")
+async def admin_scene_video(
+    order_id: str,
+    body: dict,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Generate scene video: LTX 2.3 Fast → overlay TTS audio.
+
+    Reads `visual_prompt` from video_materials.json, generates raw video
+    via LTX 2.3 Fast, then overlays the TTS audio track.
+    Stores at `scenes/{ch_idx}_{s_idx}/{language}/scene_video.mp4`.
+    """
+    ch_idx = body.get("chapter_index")
+    s_idx = body.get("scene_index")
+    language = body.get("language", "zh")
+
+    if ch_idx is None or s_idx is None:
+        raise HTTPException(400, "chapter_index and scene_index are required")
+
+    if not settings.fal_api_key:
+        raise HTTPException(500, "FAL_API_KEY not configured")
+
+    from core.storage import get_storage_client
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+
+    # Load storyboard to get visual_prompt
+    blob = bucket.blob(f"pipeline/{order_id}/video_materials.json")
+    if not blob.exists():
+        raise HTTPException(404, "video_materials.json not found — generate storyboard first")
+    materials = json.loads(blob.download_as_text(encoding="utf-8"))
+    chapters = materials.get("chapters", [])
+    scene = None
+    for ch in chapters:
+        if ch["chapter_index"] == ch_idx:
+            for sc in ch.get("scenes", []):
+                if sc["scene_index"] == s_idx:
+                    scene = sc
+                    break
+            break
+    if scene is None:
+        raise HTTPException(404, f"Scene {ch_idx}.{s_idx} not found")
+
+    prompt = scene.get("visual_prompt", "")
+    if not prompt:
+        raise HTTPException(400, "visual_prompt is empty — edit the storyboard first")
+
+    # Load TTS audio from GCS
+    audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/narration.wav"
+    audio_blob = bucket.blob(audio_path)
+    if not audio_blob.exists():
+        raise HTTPException(400, "TTS audio not found — generate TTS first")
+
+    audio_bytes = audio_blob.download_as_bytes()
+
+    import wave as wave_mod
+    import io
+    with wave_mod.open(io.BytesIO(audio_bytes), 'r') as wf:
+        audio_dur = wf.getnframes() / wf.getframerate()
+
+    # Generate LTX video
+    from services.video_gen_service import FalLtxClient
+    ltx = FalLtxClient(settings.fal_api_key)
+    logger.info(f"LTX generating for scene {ch_idx}.{s_idx} — audio_dur={audio_dur:.2f}s prompt={prompt[:60]}")
+    raw_video = ltx.generate(prompt, audio_dur)
+    if raw_video is None:
+        raise HTTPException(500, "LTX video generation failed")
+
+    # Save raw video to GCS (for debugging)
+    raw_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/raw_video.mp4"
+    bucket.blob(raw_path).upload_from_string(raw_video, content_type="video/mp4")
+
+    # Overlay TTS audio onto the video
+    from services.video_gen_service import assemble_scene_video_from_clip
+    mp4_bytes = assemble_scene_video_from_clip(raw_video, audio_bytes)
+    if mp4_bytes is None:
+        raise HTTPException(500, "Scene video assembly failed — FFmpeg may be unavailable")
+
+    # Persist to GCS
+    blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/scene_video.mp4"
+    bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
+
+    video_b64 = base64.b64encode(mp4_bytes).decode("utf-8")
+    return {
+        "video_data_url": f"data:video/mp4;base64,{video_b64}",
+        "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}",
+        "duration_sec": round(audio_dur, 2),
+    }
+
+
+@router.post("/orders/{order_id}/video-materials/chapter/merge")
+async def admin_chapter_merge(
+    order_id: str,
+    body: dict,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Merge all scene videos in a chapter into one MP4 with a title card.
+
+    Downloads each scene's `scene_video.mp4` from GCS and concatenates them.
+    Falls back to image+audio loop for scenes without video.
+    The `language` param selects which narration track to use. Defaults to 'zh'.
+    """
+    ch_idx = body.get("chapter_index")
+    language = body.get("language", "zh")
+    if ch_idx is None:
+        raise HTTPException(400, "chapter_index is required")
+
+    from core.storage import get_storage_client
+
+    client = get_storage_client()
+    temp_bucket = client.bucket(settings.gcs_temp_bucket)
+    blob = temp_bucket.blob(f"pipeline/{order_id}/video_materials.json")
+    if not blob.exists():
+        raise HTTPException(400, "video_materials.json not found")
+    materials = json.loads(blob.download_as_text(encoding="utf-8"))
+    chapters = materials.get("chapters", [])
+    chapter = next((ch for ch in chapters if ch["chapter_index"] == ch_idx), None)
+    if not chapter:
+        raise HTTPException(404, f"Chapter {ch_idx} not found")
+
+    from services.video_gen_service import merge_chapter_videos
+    mp4_bytes, srt_content = merge_chapter_videos(
+        order_id=order_id,
+        chapter_index=ch_idx,
+        scenes=chapter.get("scenes", []),
+        language=language,
+        title=chapter.get("title", ""),
+    )
+    if mp4_bytes is None:
+        raise HTTPException(500, "Chapter merge failed — generate scene videos or TTS+images first")
+
+    out_bucket = client.bucket(settings.gcs_outputs_bucket)
+    blob_path = f"orders/{order_id}/chapter_{ch_idx:02d}_{language}.mp4"
+    out_bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
+
     srt_path = f"orders/{order_id}/chapter_{ch_idx:02d}_{language}.srt"
     if srt_content:
         out_bucket.blob(srt_path).upload_from_string(srt_content, content_type="text/plain; charset=utf-8")
