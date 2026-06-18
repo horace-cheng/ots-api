@@ -2675,7 +2675,7 @@ Output ONLY the new visual_prompt text. No JSON, no commentary."""
         model="gemini-2.5-flash",
         contents=regen_prompt,
         config={
-            "max_output_tokens": 1024,
+            "max_output_tokens": 16384,
             "temperature": 0.3,
         }
     )
