@@ -2570,20 +2570,25 @@ async def admin_scene_video(
     with wave_mod.open(io.BytesIO(audio_bytes), 'r') as wf:
         audio_dur = wf.getnframes() / wf.getframerate()
 
-    # Generate LTX video
-    from services.video_gen_service import FalLtxClient
-    ltx = FalLtxClient(settings.fal_api_key)
-    logger.info(f"LTX generating for scene {ch_idx}.{s_idx} — audio_dur={audio_dur:.2f}s prompt={prompt[:60]}")
-    raw_video = ltx.generate(prompt, audio_dur)
+    # Choose video model based on audio duration
+    from services.video_gen_service import FalLtxClient, FalPixVerseClient, assemble_scene_video_from_clip
+    if audio_dur < 15:
+        model_name = "PixVerse V6"
+        client = FalPixVerseClient(settings.fal_api_key)
+        raw_video = client.generate(prompt, audio_dur)
+    else:
+        model_name = "LTX 2.3 Fast"
+        client = FalLtxClient(settings.fal_api_key)
+        raw_video = client.generate(prompt, audio_dur)
+    logger.info(f"{model_name} generating for scene {ch_idx}.{s_idx} — audio_dur={audio_dur:.2f}s prompt={prompt[:60]}")
     if raw_video is None:
-        raise HTTPException(500, "LTX video generation failed")
+        raise HTTPException(500, f"{model_name} video generation failed")
 
     # Save raw video to GCS (for debugging)
     raw_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/raw_video.mp4"
     bucket.blob(raw_path).upload_from_string(raw_video, content_type="video/mp4")
 
     # Overlay TTS audio onto the video
-    from services.video_gen_service import assemble_scene_video_from_clip
     mp4_bytes = assemble_scene_video_from_clip(raw_video, audio_bytes)
     if mp4_bytes is None:
         raise HTTPException(500, "Scene video assembly failed — FFmpeg may be unavailable")
