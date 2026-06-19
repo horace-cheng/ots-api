@@ -2164,17 +2164,18 @@ async def admin_get_video_materials(
                     entry["reference_image_url"] = generate_signed_url(settings.gcs_temp_bucket, ref_path)
                 scene_assets[key] = entry
 
-    # Check for existing chapter videos & SRTs
+    # Check for existing chapter videos & SRTs (language-suffixed)
     chapter_videos = {}
     chapter_srts = {}
     for ch in chapters:
         ch_idx = ch["chapter_index"]
-        ch_path = f"orders/{order_id}/chapter_{ch_idx:02d}.mp4"
-        if out_bucket.blob(ch_path).exists():
-            chapter_videos[str(ch_idx)] = generate_signed_url(settings.gcs_outputs_bucket, ch_path)
-        srt_path = f"orders/{order_id}/chapter_{ch_idx:02d}.srt"
-        if out_bucket.blob(srt_path).exists():
-            chapter_srts[str(ch_idx)] = generate_signed_url(settings.gcs_outputs_bucket, srt_path)
+        for lang in ("tai-lo", "zh"):
+            ch_path = f"orders/{order_id}/chapter_{ch_idx:02d}_{lang}.mp4"
+            if out_bucket.blob(ch_path).exists():
+                chapter_videos[f"{ch_idx}_{lang}"] = generate_signed_url(settings.gcs_outputs_bucket, ch_path)
+            srt_path = f"orders/{order_id}/chapter_{ch_idx:02d}_{lang}.srt"
+            if out_bucket.blob(srt_path).exists():
+                chapter_srts[f"{ch_idx}_{lang}"] = generate_signed_url(settings.gcs_outputs_bucket, srt_path)
 
     return {
         "materials": materials,
