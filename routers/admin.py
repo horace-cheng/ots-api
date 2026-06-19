@@ -3101,6 +3101,10 @@ async def admin_scene_video_upload(
     blob_path = f"pipeline/{order_id}/scenes/{chapter_index}_{scene_index}/{language}/scene_video.mp4"
     bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
 
+    # Also save raw (unmerged) video for inspection, overwriting any old AI-generated file
+    raw_path = f"pipeline/{order_id}/scenes/{chapter_index}_{scene_index}/raw_video.mp4"
+    bucket.blob(raw_path).upload_from_string(video_bytes, content_type="video/mp4")
+
     from core.storage import generate_signed_url
     buster = uuid.uuid4().hex[:8]
     video_data_url = generate_signed_url(settings.gcs_temp_bucket, blob_path, extra_params={"_cb": buster})
