@@ -2140,7 +2140,7 @@ async def admin_get_video_materials(
         for scene in ch.get("scenes", []):
             s_idx = scene["scene_index"]
             tracks = scene.get("tracks", {})
-            languages = list(tracks.keys()) if tracks else ["zh"]
+            languages = list(tracks.keys()) if tracks else ["tai-lo"]
             for lang in languages:
                 key = f"{ch_idx}_{s_idx}_{lang}"
                 entry = {"audio_url": None, "audio_duration": None, "video_url": None, "reference_image_url": None}
@@ -2550,13 +2550,12 @@ async def admin_chapter_assemble(
     for SRT subtitles and audio assets. Defaults to 'zh'.
     """
     ch_idx = body.get("chapter_index")
-    language = body.get("language", "zh")
+    language = body.get("language", "tai-lo")
     if ch_idx is None:
         raise HTTPException(400, "chapter_index is required")
 
     from core.storage import get_storage_client
 
-    # Load storyboard to get scenes + title
     client = get_storage_client()
     temp_bucket = client.bucket(settings.gcs_temp_bucket)
     blob = temp_bucket.blob(f"pipeline/{order_id}/video_materials.json")
@@ -2593,6 +2592,158 @@ async def admin_chapter_assemble(
     srt_url = generate_signed_url(settings.gcs_outputs_bucket, srt_path) if srt_content else None
 
     return {"video_url": video_url, "srt_url": srt_url, "gcs_path": f"gs://{settings.gcs_outputs_bucket}/{blob_path}"}
+
+
+@router.post("/orders/{order_id}/video-materials/scene/video")
+async def admin_scene_video(
+    order_id: str,
+    body: dict,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Generate scene video asynchronously. Returns task_id for polling."""
+    ch_idx = body.get("chapter_index")
+    s_idx = body.get("scene_index")
+    language = body.get("language", "tai-lo")
+
+    if ch_idx is None or s_idx is None:
+        raise HTTPException(400, "chapter_index and scene_index are required")
+
+    if not settings.fal_api_key:
+        raise HTTPException(500, "FAL_API_KEY not configured")
+
+    from core.storage import get_storage_client
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+
+    blob = bucket.blob(f"pipeline/{order_id}/video_materials.json")
+    if not blob.exists():
+        raise HTTPException(404, "video_materials.json not found")
+    materials = json.loads(blob.download_as_text(encoding="utf-8"))
+    chapters = materials.get("chapters", [])
+    scene = None
+    for ch in chapters:
+        if ch["chapter_index"] == ch_idx:
+            for sc in ch.get("scenes", []):
+                if sc["scene_index"] == s_idx:
+                    scene = sc
+                    break
+            break
+    if scene is None:
+        raise HTTPException(404, f"Scene {ch_idx}.{s_idx} not found")
+
+    prompt = scene.get("visual_prompt", "")
+    if not prompt:
+        raise HTTPException(400, "visual_prompt is empty")
+
+    visual_style = materials.get("settings", {}).get("visual_style", "photorealistic")
+    style_desc = _get_style_prompt(visual_style)
+    prompt = f"{prompt}, {style_desc}"
+
+    audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/narration.wav"
+    if not bucket.blob(audio_path).exists():
+        raise HTTPException(400, "TTS audio not found")
+
+    ref_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/reference.jpg"
+    if not bucket.blob(ref_path).exists():
+        raise HTTPException(400, "Reference image not found")
+
+    task_id = str(uuid.uuid4())
+    task_blob_path = f"pipeline/{order_id}/tasks/{task_id}.json"
+    bucket.blob(task_blob_path).upload_from_string(
+        json.dumps({"status": "processing"})
+    )
+
+    asyncio.create_task(_run_scene_video_task(
+        order_id=order_id, ch_idx=ch_idx, s_idx=s_idx,
+        language=language, prompt=prompt,
+        task_blob_path=task_blob_path,
+        bucket_name=settings.gcs_temp_bucket,
+    ))
+
+    return {"task_id": task_id}
+
+
+async def _run_scene_video_task(
+    order_id: str, ch_idx: int, s_idx: int, language: str,
+    prompt: str, task_blob_path: str, bucket_name: str,
+):
+    """Background: fal.ai I2V → overlay TTS → save + write task result."""
+    import io
+    import wave as wave_mod
+
+    loop = asyncio.get_event_loop()
+    try:
+        from core.storage import get_storage_client, generate_signed_url
+        bg_client = get_storage_client()
+        bucket = bg_client.bucket(bucket_name)
+
+        audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/narration.wav"
+        audio_bytes = bucket.blob(audio_path).download_as_bytes()
+        with wave_mod.open(io.BytesIO(audio_bytes), 'r') as wf:
+            audio_dur = wf.getnframes() / wf.getframerate()
+
+        ref_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/reference.jpg"
+        ref_url = generate_signed_url(bucket_name, ref_path)
+
+        from services.video_gen_service import (
+            FalLtxImageToVideoClient, FalPixVerseImageToVideoClient,
+            assemble_scene_video_from_clip,
+        )
+
+        if audio_dur < 15:
+            vc = FalPixVerseImageToVideoClient(settings.fal_api_key)
+            raw_video = await loop.run_in_executor(None, vc.generate, ref_url, prompt, audio_dur)
+        else:
+            vc = FalLtxImageToVideoClient(settings.fal_api_key)
+            raw_video = await loop.run_in_executor(None, vc.generate, ref_url, prompt, audio_dur)
+
+        if raw_video is None:
+            raise RuntimeError("fal.ai returned None")
+
+        raw_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/raw_video.mp4"
+        bucket.blob(raw_path).upload_from_string(raw_video, content_type="video/mp4")
+
+        mp4_bytes = await loop.run_in_executor(None, assemble_scene_video_from_clip, raw_video, audio_bytes)
+        if mp4_bytes is None:
+            raise RuntimeError("FFmpeg assembly failed")
+
+        blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/scene_video.mp4"
+        bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
+
+        buster = uuid.uuid4().hex[:8]
+        video_url = generate_signed_url(bucket_name, blob_path, extra_params={"_cb": buster})
+        bucket.blob(task_blob_path).upload_from_string(json.dumps({
+            "status": "done",
+            "video_data_url": video_url,
+            "gcs_path": f"gs://{bucket_name}/{blob_path}",
+            "duration_sec": round(audio_dur, 2),
+        }))
+        logger.info(f"[bg] scene {ch_idx}.{s_idx} video DONE")
+
+    except Exception as e:
+        logger.error(f"[bg] scene {ch_idx}.{s_idx} video failed: {e}", exc_info=True)
+        bg_client = get_storage_client()
+        bg_client.bucket(bucket_name).blob(task_blob_path).upload_from_string(
+            json.dumps({"status": "error", "error": str(e)}),
+        )
+
+
+@router.get("/orders/{order_id}/video-materials/scene/video-task/{task_id}")
+async def admin_get_scene_video_task(
+    order_id: str,
+    task_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Poll the status of an async scene video generation task."""
+    from core.storage import get_storage_client
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+    task_blob_path = f"pipeline/{order_id}/tasks/{task_id}.json"
+    if not bucket.blob(task_blob_path).exists():
+        raise HTTPException(404, "Task not found")
+    return json.loads(bucket.blob(task_blob_path).download_as_text(encoding="utf-8"))
 
 
 @router.post("/orders/{order_id}/video-materials/clean")
@@ -2802,7 +2953,7 @@ async def admin_scene_video_upload(
     file: UploadFile = File(...),
     chapter_index: int = Form(...),
     scene_index: int = Form(...),
-    language: str = Form("zh"),
+    language: str = Form("tai-lo"),
     merge_audio: bool = Form(False),
     admin: dict = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db),
