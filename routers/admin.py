@@ -2327,6 +2327,24 @@ async def admin_scene_image(
     return {"image_data_url": data_url, "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}"}
 
 
+_STYLE_PROMPTS = {
+    "photorealistic": None,
+    "cinematic": "Cinematic, film grain, dramatic lighting, anamorphic, deep contrast, rich shadows",
+    "anime": "Anime style, cel-shaded, bold lines, vibrant flat colors, Studio Ghibli inspired, painterly backgrounds",
+    "3d_render": "3D render, Pixar style, bright colors, soft global illumination, subsurface scattering, playful",
+    "comic": "Comic book style, halftone dots, bold outlines, Ben-Day dots, pop art colors, speech bubble aesthetic",
+    "watercolor": "Watercolor painting, soft washes, paper texture, wet-on-wet, delicate translucent layers, hand-painted",
+    "oil_painting": "Oil painting, impasto, visible brush strokes, canvas texture, Van Gogh or Rembrandt palette, thick paint",
+}
+
+
+def _get_style_prompt(visual_style: str) -> str:
+    desc = _STYLE_PROMPTS.get(visual_style)
+    if desc is None:
+        return "Photorealistic, natural lighting, true-to-life, sharp details"
+    return desc
+
+
 @router.post("/orders/{order_id}/video-materials/scene/reference-image")
 async def admin_scene_reference_image(
     order_id: str,
@@ -2373,7 +2391,8 @@ async def admin_scene_reference_image(
 
     # Append visual style
     visual_style = materials.get("settings", {}).get("visual_style", "photorealistic")
-    prompt = f"{prompt} Style: {visual_style}."
+    style_desc = _get_style_prompt(visual_style)
+    prompt = f"{prompt}, {style_desc}"
 
     # Generate reference image
     from services.video_gen_service import generate_image
@@ -2623,7 +2642,8 @@ async def admin_scene_video(
 
     # Append visual style
     visual_style = materials.get("settings", {}).get("visual_style", "photorealistic")
-    prompt = f"{prompt} Style: {visual_style}."
+    style_desc = _get_style_prompt(visual_style)
+    prompt = f"{prompt}, {style_desc}"
 
     # Load TTS audio from GCS
     audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/narration.wav"
