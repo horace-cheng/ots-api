@@ -2738,10 +2738,13 @@ async def _run_scene_video_task(
         blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/scene_video.mp4"
         bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
 
-        video_b64 = base64.b64encode(mp4_bytes).decode("utf-8")
+        from core.storage import generate_signed_url
+        video_data_url = generate_signed_url(bucket_name, blob_path)
+        buster = uuid.uuid4().hex[:8]
+        video_data_url += f"&_cb={buster}" if "?" in video_data_url else f"?_cb={buster}"
         bucket.blob(task_blob_path).upload_from_string(json.dumps({
             "status": "done",
-            "video_data_url": f"data:video/mp4;base64,{video_b64}",
+            "video_data_url": video_data_url,
             "gcs_path": f"gs://{bucket_name}/{blob_path}",
             "duration_sec": round(audio_dur, 2),
         }))
@@ -3100,8 +3103,12 @@ async def admin_scene_video_upload(
     blob_path = f"pipeline/{order_id}/scenes/{chapter_index}_{scene_index}/{language}/scene_video.mp4"
     bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
 
-    video_b64 = base64.b64encode(mp4_bytes).decode("utf-8")
+    from core.storage import generate_signed_url
+    video_data_url = generate_signed_url(settings.gcs_temp_bucket, blob_path)
+    # Add cache buster to force browser to reload
+    buster = uuid.uuid4().hex[:8]
+    video_data_url += f"&_cb={buster}" if "?" in video_data_url else f"?_cb={buster}"
     return {
-        "video_data_url": f"data:video/mp4;base64,{video_b64}",
+        "video_data_url": video_data_url,
         "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}",
     }
