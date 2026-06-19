@@ -691,6 +691,8 @@ def assemble_scene_video_from_clip(video_bytes: bytes, audio_bytes: bytes) -> Op
              "-c:v", "copy",
              "-map", "0:v:0",
              "-map", "1:a:0",
+             "-af", "apad",
+             "-shortest",
              "-movflags", "+faststart",
              out_path],
             capture_output=True, text=True, timeout=120,
