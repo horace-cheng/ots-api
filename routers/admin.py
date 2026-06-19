@@ -2574,6 +2574,8 @@ async def admin_chapter_assemble(
         chapter_index=ch_idx,
         scenes=chapter.get("scenes", []),
         title=chapter.get("title", ""),
+        title_zh=chapter.get("title_zh", ""),
+        title_tai_lo=chapter.get("title_tai_lo", ""),
         language=language,
     )
     if mp4_bytes is None:
@@ -2901,8 +2903,10 @@ async def admin_chapter_merge(
         order_id=order_id,
         chapter_index=ch_idx,
         scenes=chapter.get("scenes", []),
-        language=language,
         title=chapter.get("title", ""),
+        title_tai_lo=chapter.get("title_tai_lo", ""),
+        title_zh=chapter.get("title_zh", ""),
+        language=language,
     )
     if mp4_bytes is None:
         raise HTTPException(500, "Chapter merge failed — generate scene videos or TTS+images first")

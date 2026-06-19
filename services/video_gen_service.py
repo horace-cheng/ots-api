@@ -336,6 +336,8 @@ def assemble_chapter_video(
     chapter_index: int,
     scenes: list[dict],
     title: str = "",
+    title_zh: str = "",
+    title_tai_lo: str = "",
     language: str = "zh",
 ) -> tuple[Optional[bytes], str]:
     """Assemble all scenes in a chapter into one MP4 + SRT subtitle file.
@@ -371,7 +373,12 @@ def assemble_chapter_video(
                 font_cjk = None
                 for p in _CJK_FONTS:
                     if os.path.exists(p):
-                        font_cjk = ImageFont.truetype(p, 52)
+                        font_cjk = ImageFont.truetype(p, 48)
+                        break
+                font_cjk_sm = None
+                for p in _CJK_FONTS:
+                    if os.path.exists(p):
+                        font_cjk_sm = ImageFont.truetype(p, 32)
                         break
                 font_en = None
                 for p in ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -381,13 +388,22 @@ def assemble_chapter_video(
                         break
                 if font_cjk is None:
                     font_cjk = ImageFont.load_default()
+                if font_cjk_sm is None:
+                    font_cjk_sm = ImageFont.load_default()
                 if font_en is None:
                     font_en = ImageFont.load_default()
-                zh = title
                 _, _, tw, _ = draw.textbbox((0, 0), f"Chapter {chapter_index + 1}", font=font_en)
-                draw.text(((W - tw) / 2, H * 0.32), f"Chapter {chapter_index + 1}", fill=(180, 180, 200), font=font_en)
-                _, _, tw, _ = draw.textbbox((0, 0), zh, font=font_cjk)
-                draw.text(((W - tw) / 2, H * 0.45), zh, fill=(255, 255, 255), font=font_cjk)
+                draw.text(((W - tw) / 2, H * 0.22), f"Chapter {chapter_index + 1}", fill=(180, 180, 200), font=font_en)
+                _, _, tw, _ = draw.textbbox((0, 0), title, font=font_cjk)
+                draw.text(((W - tw) / 2, H * 0.35), title, fill=(255, 255, 255), font=font_cjk)
+                y = H * 0.52
+                if title_tai_lo:
+                    _, _, tw, _ = draw.textbbox((0, 0), title_tai_lo, font=font_cjk_sm)
+                    draw.text(((W - tw) / 2, y), title_tai_lo, fill=(200, 200, 220), font=font_cjk_sm)
+                    y += 44
+                if title_zh:
+                    _, _, tw, _ = draw.textbbox((0, 0), title_zh, font=font_cjk_sm)
+                    draw.text(((W - tw) / 2, y), title_zh, fill=(200, 200, 220), font=font_cjk_sm)
                 title_png = os.path.join(tmpdir, "title.png")
                 img.save(title_png)
                 title_mp4 = os.path.join(tmpdir, "title.mp4")
@@ -704,8 +720,10 @@ def merge_chapter_videos(
     order_id: str,
     chapter_index: int,
     scenes: list[dict],
-    language: str = "zh",
     title: str = "",
+    title_tai_lo: str = "",
+    title_zh: str = "",
+    language: str = "zh",
 ) -> tuple[Optional[bytes], str]:
     """Concatenate all scene videos in a chapter into one MP4 + SRT.
     
@@ -738,7 +756,12 @@ def merge_chapter_videos(
                 font_cjk = None
                 for p in _CJK_FONTS:
                     if os.path.exists(p):
-                        font_cjk = ImageFont.truetype(p, 52)
+                        font_cjk = ImageFont.truetype(p, 48)
+                        break
+                font_cjk_sm = None
+                for p in _CJK_FONTS:
+                    if os.path.exists(p):
+                        font_cjk_sm = ImageFont.truetype(p, 32)
                         break
                 font_en = None
                 for p in ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -748,13 +771,22 @@ def merge_chapter_videos(
                         break
                 if font_cjk is None:
                     font_cjk = ImageFont.load_default()
+                if font_cjk_sm is None:
+                    font_cjk_sm = ImageFont.load_default()
                 if font_en is None:
                     font_en = ImageFont.load_default()
-                zh = title
                 _, _, tw, _ = draw.textbbox((0, 0), f"Chapter {chapter_index + 1}", font=font_en)
-                draw.text(((W - tw) / 2, H * 0.32), f"Chapter {chapter_index + 1}", fill=(180, 180, 200), font=font_en)
-                _, _, tw, _ = draw.textbbox((0, 0), zh, font=font_cjk)
-                draw.text(((W - tw) / 2, H * 0.45), zh, fill=(255, 255, 255), font=font_cjk)
+                draw.text(((W - tw) / 2, H * 0.22), f"Chapter {chapter_index + 1}", fill=(180, 180, 200), font=font_en)
+                _, _, tw, _ = draw.textbbox((0, 0), title, font=font_cjk)
+                draw.text(((W - tw) / 2, H * 0.35), title, fill=(255, 255, 255), font=font_cjk)
+                y = H * 0.52
+                if title_tai_lo:
+                    _, _, tw, _ = draw.textbbox((0, 0), title_tai_lo, font=font_cjk_sm)
+                    draw.text(((W - tw) / 2, y), title_tai_lo, fill=(200, 200, 220), font=font_cjk_sm)
+                    y += 44
+                if title_zh:
+                    _, _, tw, _ = draw.textbbox((0, 0), title_zh, font=font_cjk_sm)
+                    draw.text(((W - tw) / 2, y), title_zh, fill=(200, 200, 220), font=font_cjk_sm)
                 title_png = os.path.join(tmpdir, "title.png")
                 img.save(title_png)
                 title_mp4 = os.path.join(tmpdir, "title.mp4")
