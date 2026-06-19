@@ -497,7 +497,7 @@ class FalPixVerseClient:
             "resolution": "720p",
             "generate_audio_switch": False,
         }
-        resp = requests.post(self._base, json=payload, headers=headers, timeout=180)
+        resp = requests.post(self._base, json=payload, headers=headers, timeout=600)
         resp.raise_for_status()
         data = resp.json()
         video_url = data.get("video", {}).get("url")
@@ -505,7 +505,7 @@ class FalPixVerseClient:
             logger.error(f"PixVerse no video URL: {data}")
             return None
         logger.info(f"PixVerse gen OK — duration_requested={duration}s prompt={prompt[:60]}")
-        vr = requests.get(video_url, timeout=120)
+        vr = requests.get(video_url, timeout=600)
         vr.raise_for_status()
         return vr.content
 
@@ -541,7 +541,7 @@ class FalLtxClient:
             "aspect_ratio": aspect_ratio,
             "resolution": "1080p",
         }
-        resp = requests.post(self._base, json=payload, headers=headers, timeout=180)
+        resp = requests.post(self._base, json=payload, headers=headers, timeout=600)
         resp.raise_for_status()
         data = resp.json()
         video_url = data.get("video", {}).get("url")
@@ -549,7 +549,7 @@ class FalLtxClient:
             logger.error(f"LTX no video URL: {data}")
             return None
         logger.info(f"LTX gen OK — duration_requested={duration}s prompt={prompt[:60]}")
-        vr = requests.get(video_url, timeout=120)
+        vr = requests.get(video_url, timeout=600)
         vr.raise_for_status()
         return vr.content
 
@@ -585,7 +585,7 @@ class FalLtxImageToVideoClient:
             "duration": duration,
             "aspect_ratio": aspect_ratio,
         }
-        resp = requests.post(self._base, json=payload, headers=headers, timeout=180)
+        resp = requests.post(self._base, json=payload, headers=headers, timeout=600)
         resp.raise_for_status()
         data = resp.json()
         video_url = data.get("video", {}).get("url")
@@ -593,7 +593,7 @@ class FalLtxImageToVideoClient:
             logger.error(f"LTX I2V no video URL: {data}")
             return None
         logger.info(f"LTX I2V OK — duration_requested={duration}s prompt={prompt[:60]}")
-        vr = requests.get(video_url, timeout=120)
+        vr = requests.get(video_url, timeout=600)
         vr.raise_for_status()
         return vr.content
 
@@ -622,7 +622,7 @@ class FalPixVerseImageToVideoClient:
             "resolution": "720p",
             "generate_audio_switch": False,
         }
-        resp = requests.post(self._base, json=payload, headers=headers, timeout=180)
+        resp = requests.post(self._base, json=payload, headers=headers, timeout=600)
         resp.raise_for_status()
         data = resp.json()
         video_url = data.get("video", {}).get("url")
@@ -630,7 +630,7 @@ class FalPixVerseImageToVideoClient:
             logger.error(f"PixVerse I2V no video URL: {data}")
             return None
         logger.info(f"PixVerse I2V OK — duration_requested={duration}s prompt={prompt[:60]}")
-        vr = requests.get(video_url, timeout=120)
+        vr = requests.get(video_url, timeout=600)
         vr.raise_for_status()
         return vr.content
 
