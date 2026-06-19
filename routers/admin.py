@@ -2371,6 +2371,10 @@ async def admin_scene_reference_image(
     if not prompt:
         raise HTTPException(400, "visual_prompt is empty — edit the storyboard first")
 
+    # Append visual style
+    visual_style = materials.get("settings", {}).get("visual_style", "photorealistic")
+    prompt = f"{prompt} Style: {visual_style}."
+
     # Generate reference image
     from services.video_gen_service import generate_image
     jpg_bytes = generate_image(prompt)
@@ -2616,6 +2620,10 @@ async def admin_scene_video(
     prompt = scene.get("visual_prompt", "")
     if not prompt:
         raise HTTPException(400, "visual_prompt is empty — edit the storyboard first")
+
+    # Append visual style
+    visual_style = materials.get("settings", {}).get("visual_style", "photorealistic")
+    prompt = f"{prompt} Style: {visual_style}."
 
     # Load TTS audio from GCS
     audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/narration.wav"
