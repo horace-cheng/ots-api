@@ -554,6 +554,86 @@ class FalLtxClient:
         return vr.content
 
 
+# ── Image-to-Video on fal.ai ──────────────────────────────────────────────────
+
+class FalLtxImageToVideoClient:
+    """Client for LTX 2.3 Fast image-to-video via fal.ai."""
+
+    VALID_DURATIONS = [6, 8, 10, 12, 14, 16, 18, 20]
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self._base = "https://fal.run/fal-ai/ltx-2.3/image-to-video/fast"
+
+    def _round_duration(self, seconds: float) -> int:
+        for d in self.VALID_DURATIONS:
+            if d >= seconds:
+                return d
+        return self.VALID_DURATIONS[-1]
+
+    def generate(self, image_url: str, prompt: str, duration_sec: float,
+                 aspect_ratio: str = "16:9") -> Optional[bytes]:
+        """Generate a video from a reference image + prompt via LTX I2V Fast. Returns MP4 bytes or None."""
+        duration = self._round_duration(duration_sec)
+        headers = {
+            "Authorization": f"Key {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "image_url": image_url,
+            "prompt": prompt,
+            "duration": duration,
+            "aspect_ratio": aspect_ratio,
+        }
+        resp = requests.post(self._base, json=payload, headers=headers, timeout=180)
+        resp.raise_for_status()
+        data = resp.json()
+        video_url = data.get("video", {}).get("url")
+        if not video_url:
+            logger.error(f"LTX I2V no video URL: {data}")
+            return None
+        logger.info(f"LTX I2V OK — duration_requested={duration}s prompt={prompt[:60]}")
+        vr = requests.get(video_url, timeout=120)
+        vr.raise_for_status()
+        return vr.content
+
+
+class FalPixVerseImageToVideoClient:
+    """Client for PixVerse V6 image-to-video via fal.ai."""
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self._base = "https://fal.run/fal-ai/pixverse/v6/image-to-video"
+
+    def generate(self, image_url: str, prompt: str, duration_sec: float) -> Optional[bytes]:
+        """Generate a video from a reference image + prompt via PixVerse V6 I2V. Returns MP4 bytes or None."""
+        duration = min(int(duration_sec) or 1, 15)
+        headers = {
+            "Authorization": f"Key {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "image_url": image_url,
+            "prompt": prompt,
+            "aspect_ratio": "16:9",
+            "duration": duration,
+            "fps": 24,
+            "resolution": "720p",
+            "generate_audio_switch": False,
+        }
+        resp = requests.post(self._base, json=payload, headers=headers, timeout=180)
+        resp.raise_for_status()
+        data = resp.json()
+        video_url = data.get("video", {}).get("url")
+        if not video_url:
+            logger.error(f"PixVerse I2V no video URL: {data}")
+            return None
+        logger.info(f"PixVerse I2V OK — duration_requested={duration}s prompt={prompt[:60]}")
+        vr = requests.get(video_url, timeout=120)
+        vr.raise_for_status()
+        return vr.content
+
+
 # ── Scene Video Assembly (Audio Overlay) ──────────────────────────────────────
 
 def assemble_scene_video_from_clip(video_bytes: bytes, audio_bytes: bytes) -> Optional[bytes]:

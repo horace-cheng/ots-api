@@ -2141,7 +2141,7 @@ async def admin_get_video_materials(
             languages = list(tracks.keys()) if tracks else ["zh"]
             for lang in languages:
                 key = f"{ch_idx}_{s_idx}_{lang}"
-                entry = {"audio_url": None, "audio_duration": None, "video_url": None}
+                entry = {"audio_url": None, "audio_duration": None, "video_url": None, "reference_image_url": None}
                 audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{lang}/narration.wav"
                 audio_blob = temp_bucket.blob(audio_path)
                 if audio_blob.exists():
@@ -2157,6 +2157,9 @@ async def admin_get_video_materials(
                 video_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{lang}/scene_video.mp4"
                 if temp_bucket.blob(video_path).exists():
                     entry["video_url"] = generate_signed_url(settings.gcs_temp_bucket, video_path)
+                ref_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/reference.jpg"
+                if temp_bucket.blob(ref_path).exists():
+                    entry["reference_image_url"] = generate_signed_url(settings.gcs_temp_bucket, ref_path)
                 scene_assets[key] = entry
 
     # Check for existing chapter videos & SRTs
@@ -2319,6 +2322,63 @@ async def admin_scene_image(
     client = get_storage_client()
     bucket = client.bucket(settings.gcs_temp_bucket)
     blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/visual.jpg"
+    bucket.blob(blob_path).upload_from_string(jpg_bytes, content_type="image/jpeg")
+
+    return {"image_data_url": data_url, "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}"}
+
+
+@router.post("/orders/{order_id}/video-materials/scene/reference-image")
+async def admin_scene_reference_image(
+    order_id: str,
+    body: dict,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Generate a reference image for image-to-video generation.
+
+    Reads the visual_prompt from video_materials.json, generates a FLUX
+    image, and saves it as reference.jpg on GCS. The user confirms this
+    image before video generation uses it as the I2V starting frame.
+    """
+    ch_idx = body.get("chapter_index")
+    s_idx = body.get("scene_index")
+
+    if ch_idx is None or s_idx is None:
+        raise HTTPException(400, "chapter_index and scene_index are required")
+
+    from core.storage import get_storage_client
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+
+    # Load visual_prompt from video_materials.json
+    blob = bucket.blob(f"pipeline/{order_id}/video_materials.json")
+    if not blob.exists():
+        raise HTTPException(404, "video_materials.json not found — generate storyboard first")
+    materials = json.loads(blob.download_as_text(encoding="utf-8"))
+    chapters = materials.get("chapters", [])
+    scene = None
+    for ch in chapters:
+        if ch["chapter_index"] == ch_idx:
+            for sc in ch.get("scenes", []):
+                if sc["scene_index"] == s_idx:
+                    scene = sc
+                    break
+            break
+    if scene is None:
+        raise HTTPException(404, f"Scene {ch_idx}.{s_idx} not found")
+
+    prompt = scene.get("visual_prompt", "")
+    if not prompt:
+        raise HTTPException(400, "visual_prompt is empty — edit the storyboard first")
+
+    # Generate reference image
+    from services.video_gen_service import generate_image
+    jpg_bytes = generate_image(prompt)
+    img_b64 = base64.b64encode(jpg_bytes).decode("utf-8")
+    data_url = f"data:image/jpeg;base64,{img_b64}"
+
+    # Persist to GCS
+    blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/reference.jpg"
     bucket.blob(blob_path).upload_from_string(jpg_bytes, content_type="image/jpeg")
 
     return {"image_data_url": data_url, "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}"}
@@ -2570,16 +2630,25 @@ async def admin_scene_video(
     with wave_mod.open(io.BytesIO(audio_bytes), 'r') as wf:
         audio_dur = wf.getnframes() / wf.getframerate()
 
-    # Choose video model based on audio duration
-    from services.video_gen_service import FalLtxClient, FalPixVerseClient, assemble_scene_video_from_clip
+    # Check reference image exists
+    ref_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/reference.jpg"
+    ref_blob = bucket.blob(ref_path)
+    if not ref_blob.exists():
+        raise HTTPException(400, "Reference image not found — generate reference image first")
+
+    from core.storage import generate_signed_url
+    ref_url = generate_signed_url(settings.gcs_temp_bucket, ref_path)
+
+    # Choose video model based on audio duration (I2V)
+    from services.video_gen_service import FalLtxImageToVideoClient, FalPixVerseImageToVideoClient, assemble_scene_video_from_clip
     if audio_dur < 15:
-        model_name = "PixVerse V6"
-        client = FalPixVerseClient(settings.fal_api_key)
-        raw_video = client.generate(prompt, audio_dur)
+        model_name = "PixVerse V6 I2V"
+        client = FalPixVerseImageToVideoClient(settings.fal_api_key)
+        raw_video = client.generate(ref_url, prompt, audio_dur)
     else:
-        model_name = "LTX 2.3 Fast"
-        client = FalLtxClient(settings.fal_api_key)
-        raw_video = client.generate(prompt, audio_dur)
+        model_name = "LTX 2.3 I2V"
+        client = FalLtxImageToVideoClient(settings.fal_api_key)
+        raw_video = client.generate(ref_url, prompt, audio_dur)
     logger.info(f"{model_name} generating for scene {ch_idx}.{s_idx} — audio_dur={audio_dur:.2f}s prompt={prompt[:60]}")
     if raw_video is None:
         raise HTTPException(500, f"{model_name} video generation failed")
