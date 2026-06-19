@@ -336,7 +336,6 @@ def assemble_chapter_video(
     chapter_index: int,
     scenes: list[dict],
     title: str = "",
-    title_zh: str = "",
     title_tai_lo: str = "",
     language: str = "zh",
 ) -> tuple[Optional[bytes], str]:
@@ -400,10 +399,6 @@ def assemble_chapter_video(
                 if title_tai_lo:
                     _, _, tw, _ = draw.textbbox((0, 0), title_tai_lo, font=font_cjk_sm)
                     draw.text(((W - tw) / 2, y), title_tai_lo, fill=(200, 200, 220), font=font_cjk_sm)
-                    y += 44
-                if title_zh:
-                    _, _, tw, _ = draw.textbbox((0, 0), title_zh, font=font_cjk_sm)
-                    draw.text(((W - tw) / 2, y), title_zh, fill=(200, 200, 220), font=font_cjk_sm)
                 title_png = os.path.join(tmpdir, "title.png")
                 img.save(title_png)
                 title_mp4 = os.path.join(tmpdir, "title.mp4")
@@ -722,7 +717,6 @@ def merge_chapter_videos(
     scenes: list[dict],
     title: str = "",
     title_tai_lo: str = "",
-    title_zh: str = "",
     language: str = "zh",
 ) -> tuple[Optional[bytes], str]:
     """Concatenate all scene videos in a chapter into one MP4 + SRT.
@@ -783,10 +777,6 @@ def merge_chapter_videos(
                 if title_tai_lo:
                     _, _, tw, _ = draw.textbbox((0, 0), title_tai_lo, font=font_cjk_sm)
                     draw.text(((W - tw) / 2, y), title_tai_lo, fill=(200, 200, 220), font=font_cjk_sm)
-                    y += 44
-                if title_zh:
-                    _, _, tw, _ = draw.textbbox((0, 0), title_zh, font=font_cjk_sm)
-                    draw.text(((W - tw) / 2, y), title_zh, fill=(200, 200, 220), font=font_cjk_sm)
                 title_png = os.path.join(tmpdir, "title.png")
                 img.save(title_png)
                 title_mp4 = os.path.join(tmpdir, "title.mp4")
