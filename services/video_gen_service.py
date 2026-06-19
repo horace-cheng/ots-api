@@ -664,10 +664,12 @@ class FalPixVerseImageToVideoClient:
 # ── Scene Video Assembly (Audio Overlay) ──────────────────────────────────────
 
 def assemble_scene_video_from_clip(video_bytes: bytes, audio_bytes: bytes) -> Optional[bytes]:
-    """Overlay TTS audio onto an LTX-generated video clip.
+    """Overlay TTS audio onto a video clip (fal.ai raw output).
     
     Replaces the video's audio track with the TTS audio.
-    Trims to the shorter of video/audio duration.
+    Uses apad to pad audio with silence to match video duration,
+    then -shortest trims to equal length — keeps full video while
+    ensuring matching a/v durations for chapter concat.
     Returns MP4 bytes or None on failure.
     """
     ffmpeg = shutil.which("ffmpeg")
