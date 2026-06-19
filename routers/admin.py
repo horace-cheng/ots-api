@@ -12,9 +12,11 @@ from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 from datetime import datetime, timezone
 from uuid import UUID
+import asyncio
 import base64
 import json
 import logging
+import uuid
 from typing import Optional
 
 from core.database import get_db
@@ -2599,11 +2601,11 @@ async def admin_scene_video(
     admin: dict        = Depends(get_admin_user),
     db:   AsyncSession = Depends(get_db),
 ):
-    """Generate scene video: LTX 2.3 Fast → overlay TTS audio.
+    """Generate scene video asynchronously. Returns a task_id for polling.
 
-    Reads `visual_prompt` from video_materials.json, generates raw video
-    via LTX 2.3 Fast, then overlays the TTS audio track.
-    Stores at `scenes/{ch_idx}_{s_idx}/{language}/scene_video.mp4`.
+    The actual video generation runs in the background. Poll
+    GET /admin/orders/{order_id}/video-materials/scene/video-task/{task_id}
+    for the result.
     """
     ch_idx = body.get("chapter_index")
     s_idx = body.get("scene_index")
@@ -2645,61 +2647,132 @@ async def admin_scene_video(
     style_desc = _get_style_prompt(visual_style)
     prompt = f"{prompt}, {style_desc}"
 
-    # Load TTS audio from GCS
+    # Validate TTS audio exists
     audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/narration.wav"
     audio_blob = bucket.blob(audio_path)
     if not audio_blob.exists():
         raise HTTPException(400, "TTS audio not found — generate TTS first")
 
-    audio_bytes = audio_blob.download_as_bytes()
-
-    import wave as wave_mod
-    import io
-    with wave_mod.open(io.BytesIO(audio_bytes), 'r') as wf:
-        audio_dur = wf.getnframes() / wf.getframerate()
-
-    # Check reference image exists
+    # Validate reference image exists
     ref_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/reference.jpg"
     ref_blob = bucket.blob(ref_path)
     if not ref_blob.exists():
         raise HTTPException(400, "Reference image not found — generate reference image first")
 
-    from core.storage import generate_signed_url
-    ref_url = generate_signed_url(settings.gcs_temp_bucket, ref_path)
+    task_id = str(uuid.uuid4())
+    task_blob_path = f"pipeline/{order_id}/tasks/{task_id}.json"
+    bucket.blob(task_blob_path).upload_from_string(
+        json.dumps({"status": "processing"})
+    )
 
-    # Choose video model based on audio duration (I2V)
-    from services.video_gen_service import FalLtxImageToVideoClient, FalPixVerseImageToVideoClient, assemble_scene_video_from_clip
-    if audio_dur < 15:
-        model_name = "PixVerse V6 I2V"
-        client = FalPixVerseImageToVideoClient(settings.fal_api_key)
-        raw_video = client.generate(ref_url, prompt, audio_dur)
-    else:
-        model_name = "LTX 2.3 I2V"
-        client = FalLtxImageToVideoClient(settings.fal_api_key)
-        raw_video = client.generate(ref_url, prompt, audio_dur)
-    logger.info(f"{model_name} generating for scene {ch_idx}.{s_idx} — audio_dur={audio_dur:.2f}s prompt={prompt[:60]}")
-    if raw_video is None:
-        raise HTTPException(500, f"{model_name} video generation failed")
+    asyncio.create_task(_run_scene_video_task(
+        order_id=order_id,
+        ch_idx=ch_idx,
+        s_idx=s_idx,
+        language=language,
+        prompt=prompt,
+        task_blob_path=task_blob_path,
+        bucket_name=settings.gcs_temp_bucket,
+    ))
 
-    # Save raw video to GCS (for debugging)
-    raw_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/raw_video.mp4"
-    bucket.blob(raw_path).upload_from_string(raw_video, content_type="video/mp4")
+    return {"task_id": task_id}
 
-    # Overlay TTS audio onto the video
-    mp4_bytes = assemble_scene_video_from_clip(raw_video, audio_bytes)
-    if mp4_bytes is None:
-        raise HTTPException(500, "Scene video assembly failed — FFmpeg may be unavailable")
 
-    # Persist to GCS
-    blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/scene_video.mp4"
-    bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
+async def _run_scene_video_task(
+    order_id: str,
+    ch_idx: int,
+    s_idx: int,
+    language: str,
+    prompt: str,
+    task_blob_path: str,
+    bucket_name: str,
+):
+    """Background task: generate video via fal.ai, overlay TTS audio, write result to GCS."""
+    import io
+    import wave as wave_mod
 
-    video_b64 = base64.b64encode(mp4_bytes).decode("utf-8")
-    return {
-        "video_data_url": f"data:video/mp4;base64,{video_b64}",
-        "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}",
-        "duration_sec": round(audio_dur, 2),
-    }
+    loop = asyncio.get_event_loop()
+    try:
+        from core.storage import get_storage_client, generate_signed_url
+        bg_client = get_storage_client()
+        bucket = bg_client.bucket(bucket_name)
+
+        # Load TTS audio
+        audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/narration.wav"
+        audio_bytes = bucket.blob(audio_path).download_as_bytes()
+        with wave_mod.open(io.BytesIO(audio_bytes), 'r') as wf:
+            audio_dur = wf.getnframes() / wf.getframerate()
+
+        # Generate signed URL for reference image
+        ref_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/reference.jpg"
+        ref_url = generate_signed_url(bucket_name, ref_path)
+
+        from services.video_gen_service import (
+            FalLtxImageToVideoClient, FalPixVerseImageToVideoClient,
+            assemble_scene_video_from_clip,
+        )
+
+        if audio_dur < 15:
+            model_name = "PixVerse V6 I2V"
+            vc = FalPixVerseImageToVideoClient(settings.fal_api_key)
+            raw_video = await loop.run_in_executor(None, vc.generate, ref_url, prompt, audio_dur)
+        else:
+            model_name = "LTX 2.3 I2V"
+            vc = FalLtxImageToVideoClient(settings.fal_api_key)
+            raw_video = await loop.run_in_executor(None, vc.generate, ref_url, prompt, audio_dur)
+
+        logger.info(f"[bg] {model_name} scene {ch_idx}.{s_idx} — audio_dur={audio_dur:.2f}s")
+        if raw_video is None:
+            raise RuntimeError(f"{model_name} returned None")
+
+        # Save raw video
+        raw_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/raw_video.mp4"
+        bucket.blob(raw_path).upload_from_string(raw_video, content_type="video/mp4")
+
+        # Overlay audio
+        mp4_bytes = await loop.run_in_executor(None, assemble_scene_video_from_clip, raw_video, audio_bytes)
+        if mp4_bytes is None:
+            raise RuntimeError("FFmpeg assembly failed")
+
+        # Persist final video
+        blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/scene_video.mp4"
+        bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
+
+        video_b64 = base64.b64encode(mp4_bytes).decode("utf-8")
+        bucket.blob(task_blob_path).upload_from_string(json.dumps({
+            "status": "done",
+            "video_data_url": f"data:video/mp4;base64,{video_b64}",
+            "gcs_path": f"gs://{bucket_name}/{blob_path}",
+            "duration_sec": round(audio_dur, 2),
+        }))
+        logger.info(f"[bg] scene {ch_idx}.{s_idx} video DONE")
+
+    except Exception as e:
+        logger.error(f"[bg] scene {ch_idx}.{s_idx} video failed: {e}", exc_info=True)
+        from core.storage import get_storage_client
+        bg_client = get_storage_client()
+        bucket = bg_client.bucket(bucket_name)
+        bucket.blob(task_blob_path).upload_from_string(json.dumps({
+            "status": "error", "error": str(e),
+        }))
+
+
+@router.get("/orders/{order_id}/video-materials/scene/video-task/{task_id}")
+async def admin_get_scene_video_task(
+    order_id: str,
+    task_id: str,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Poll the status of an async scene video generation task."""
+    from core.storage import get_storage_client
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+    task_blob_path = f"pipeline/{order_id}/tasks/{task_id}.json"
+    blob = bucket.blob(task_blob_path)
+    if not blob.exists():
+        raise HTTPException(404, "Task not found")
+    return json.loads(blob.download_as_text(encoding="utf-8"))
 
 
 @router.post("/orders/{order_id}/video-materials/scene/regenerate-prompt")
