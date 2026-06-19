@@ -406,31 +406,46 @@ def assemble_chapter_video(
             # ── Scene clips ──
             for scene in sorted(scenes, key=lambda s: s["scene_index"]):
                 s_idx = scene["scene_index"]
-                wav_blob = bucket.blob(f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/{language}/narration.wav")
-                jpg_blob = bucket.blob(f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/reference.jpg")
-                if not wav_blob.exists() or not jpg_blob.exists():
-                    continue
-
-                wav_path = os.path.join(tmpdir, f"s{chapter_index}_{s_idx}.wav")
-                jpg_path = os.path.join(tmpdir, f"s{chapter_index}_{s_idx}.jpg")
-                clip_path = os.path.join(tmpdir, f"clip_{clip_index}.mp4")
-                wav_blob.download_to_filename(wav_path)
-                jpg_blob.download_to_filename(jpg_path)
-
-                with wave.open(wav_path, 'r') as wf:
-                    audio_duration = wf.getnframes() / wf.getframerate()
-
-                _run_ffmpeg([
-                    "-loop", "1", "-i", jpg_path, "-i", wav_path,
-                    "-c:v", "libx264", "-tune", "stillimage", "-b:v", "2M",
-                    "-c:a", "aac", "-b:a", "192k",
-                    "-pix_fmt", "yuv420p",
-                    "-t", f"{audio_duration:.3f}",
-                    clip_path,
-                ], desc=f"Scene {chapter_index}.{s_idx}")
-                cf.write(f"file '{clip_path}'\n")
-                clip_index += 1
-                total_scenes += 1
+                # Try scene video first, fall back to image+audio
+                vid_blob = bucket.blob(
+                    f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/{language}/scene_video.mp4"
+                )
+                if vid_blob.exists():
+                    vid_path = os.path.join(tmpdir, f"s{chapter_index}_{s_idx}.mp4")
+                    vid_blob.download_to_filename(vid_path)
+                    cf.write(f"file '{vid_path}'\n")
+                    clip_index += 1
+                    total_scenes += 1
+                    probe = subprocess.run(
+                        [shutil.which("ffprobe") or "ffprobe",
+                         "-v", "error", "-show_entries", "format=duration",
+                         "-of", "csv=p=0", vid_path],
+                        capture_output=True, text=True, timeout=30,
+                    )
+                    audio_duration = float(probe.stdout.strip()) if probe.returncode == 0 else 0
+                else:
+                    wav_blob = bucket.blob(f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/{language}/narration.wav")
+                    jpg_blob = bucket.blob(f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/reference.jpg")
+                    if not wav_blob.exists() or not jpg_blob.exists():
+                        continue
+                    wav_path = os.path.join(tmpdir, f"s{chapter_index}_{s_idx}.wav")
+                    jpg_path = os.path.join(tmpdir, f"s{chapter_index}_{s_idx}.jpg")
+                    clip_path = os.path.join(tmpdir, f"clip_{clip_index}.mp4")
+                    wav_blob.download_to_filename(wav_path)
+                    jpg_blob.download_to_filename(jpg_path)
+                    with wave.open(wav_path, 'r') as wf:
+                        audio_duration = wf.getnframes() / wf.getframerate()
+                    _run_ffmpeg([
+                        "-loop", "1", "-i", jpg_path, "-i", wav_path,
+                        "-c:v", "libx264", "-tune", "stillimage", "-b:v", "2M",
+                        "-c:a", "aac", "-b:a", "192k",
+                        "-pix_fmt", "yuv420p",
+                        "-t", f"{audio_duration:.3f}",
+                        clip_path,
+                    ], desc=f"Scene {chapter_index}.{s_idx} (image fallback)")
+                    cf.write(f"file '{clip_path}'\n")
+                    clip_index += 1
+                    total_scenes += 1
 
                 # SRT entry — read narration from the correct track
                 tracks = scene.get("tracks", {})
