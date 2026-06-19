@@ -6,7 +6,7 @@ QA 審閱、手動付款確認、Literary Track 指派。
 所有端點需要 admin 權限（get_admin_user）。
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
@@ -3043,3 +3043,65 @@ async def admin_save_chapter_srt(
     out_bucket.blob(srt_path).upload_from_string(srt_content, content_type="text/plain; charset=utf-8")
     srt_url = generate_signed_url(settings.gcs_outputs_bucket, srt_path)
     return {"srt_url": srt_url}
+
+
+@router.post("/orders/{order_id}/video-materials/scene/video/upload")
+async def admin_scene_video_upload(
+    order_id: str,
+    file: UploadFile = File(...),
+    chapter_index: int = Form(...),
+    scene_index: int = Form(...),
+    language: str = Form("zh"),
+    merge_audio: bool = Form(False),
+    admin: dict = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload a video file for a scene, optionally merging TTS audio."""
+    if not settings.fal_api_key:
+        raise HTTPException(500, "FAL_API_KEY not configured")
+
+    from services.video_gen_service import assemble_scene_video_from_clip
+    from core.storage import get_storage_client
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+
+    # Validate scene exists
+    blob = bucket.blob(f"pipeline/{order_id}/video_materials.json")
+    if not blob.exists():
+        raise HTTPException(404, "video_materials.json not found")
+    try:
+        materials = json.loads(blob.download_as_text(encoding="utf-8"))
+    except Exception:
+        materials = {"chapters": []}
+    chapters = materials.get("chapters", [])
+    scene_obj = None
+    for ch in chapters:
+        if ch["chapter_index"] == chapter_index:
+            for sc in ch.get("scenes", []):
+                if sc["scene_index"] == scene_index:
+                    scene_obj = sc
+                    break
+            break
+
+    video_bytes = await file.read()
+
+    if merge_audio:
+        audio_path = f"pipeline/{order_id}/scenes/{chapter_index}_{scene_index}/{language}/narration.wav"
+        audio_blob = bucket.blob(audio_path)
+        if not audio_blob.exists():
+            raise HTTPException(400, "TTS audio not found — generate TTS first to merge audio")
+        audio_bytes = audio_blob.download_as_bytes()
+        mp4_bytes = assemble_scene_video_from_clip(video_bytes, audio_bytes)
+        if mp4_bytes is None:
+            raise HTTPException(500, "Failed to merge audio with uploaded video")
+    else:
+        mp4_bytes = video_bytes
+
+    blob_path = f"pipeline/{order_id}/scenes/{chapter_index}_{scene_index}/{language}/scene_video.mp4"
+    bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
+
+    video_b64 = base64.b64encode(mp4_bytes).decode("utf-8")
+    return {
+        "video_data_url": f"data:video/mp4;base64,{video_b64}",
+        "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}",
+    }
