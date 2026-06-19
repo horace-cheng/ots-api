@@ -95,8 +95,13 @@ def generate_signed_url(
     bucket_name: str,
     blob_path: str,
     expiration_minutes: int = 60,
+    extra_params: dict | None = None,
 ) -> str:
-    """產生任何 GCS Bucket 的 Signed URL（GET method）。"""
+    """產生任何 GCS Bucket 的 Signed URL（GET method）。
+
+    extra_params: additional query parameters to include in the signature
+                  (e.g. {"_cb": "abc123"} for cache busting)
+    """
     client = get_storage_client()
     bucket = client.bucket(bucket_name)
     blob   = bucket.blob(blob_path)
@@ -105,6 +110,7 @@ def generate_signed_url(
         expiration  = timedelta(minutes=expiration_minutes),
         method      = "GET",
         credentials = _get_signing_credentials(),
+        query_parameters = extra_params,
     )
     return signed_url
 

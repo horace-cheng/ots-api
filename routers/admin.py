@@ -2288,14 +2288,74 @@ async def admin_scene_tts(
     # Persist to GCS with language in path
     from core.storage import get_storage_client
     client = get_storage_client()
-    bucket = client.bucket(settings.gcs_temp_bucket)
-    blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/narration.wav"
-    bucket.blob(blob_path).upload_from_string(wav_bytes, content_type="audio/wav")
+    out_bucket = client.bucket(settings.gcs_outputs_bucket)
+    srt_path = f"orders/{order_id}/chapter_{ch_idx:02d}_{language}.srt"
+    out_bucket.blob(srt_path).upload_from_string(srt_content, content_type="text/plain; charset=utf-8")
+    srt_url = generate_signed_url(settings.gcs_outputs_bucket, srt_path)
+    return {"srt_url": srt_url}
 
+
+@router.post("/orders/{order_id}/video-materials/scene/video/upload")
+async def admin_scene_video_upload(
+    order_id: str,
+    file: UploadFile = File(...),
+    chapter_index: int = Form(...),
+    scene_index: int = Form(...),
+    language: str = Form("zh"),
+    merge_audio: bool = Form(False),
+    admin: dict = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload a video file for a scene, optionally merging TTS audio."""
+    if not settings.fal_api_key:
+        raise HTTPException(500, "FAL_API_KEY not configured")
+
+    from services.video_gen_service import assemble_scene_video_from_clip
+    from core.storage import get_storage_client
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+
+    # Validate scene exists
+    blob = bucket.blob(f"pipeline/{order_id}/video_materials.json")
+    if not blob.exists():
+        raise HTTPException(404, "video_materials.json not found")
+    try:
+        materials = json.loads(blob.download_as_text(encoding="utf-8"))
+    except Exception:
+        materials = {"chapters": []}
+    chapters = materials.get("chapters", [])
+    scene_obj = None
+    for ch in chapters:
+        if ch["chapter_index"] == chapter_index:
+            for sc in ch.get("scenes", []):
+                if sc["scene_index"] == scene_index:
+                    scene_obj = sc
+                    break
+            break
+
+    video_bytes = await file.read()
+
+    if merge_audio:
+        audio_path = f"pipeline/{order_id}/scenes/{chapter_index}_{scene_index}/{language}/narration.wav"
+        audio_blob = bucket.blob(audio_path)
+        if not audio_blob.exists():
+            raise HTTPException(400, "TTS audio not found — generate TTS first to merge audio")
+        audio_bytes = audio_blob.download_as_bytes()
+        mp4_bytes = assemble_scene_video_from_clip(video_bytes, audio_bytes)
+        if mp4_bytes is None:
+            raise HTTPException(500, "Failed to merge audio with uploaded video")
+    else:
+        mp4_bytes = video_bytes
+
+    blob_path = f"pipeline/{order_id}/scenes/{chapter_index}_{scene_index}/{language}/scene_video.mp4"
+    bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
+
+    from core.storage import generate_signed_url
+    buster = uuid.uuid4().hex[:8]
+    video_data_url = generate_signed_url(settings.gcs_temp_bucket, blob_path, extra_params={"_cb": buster})
     return {
-        "audio_data_url": data_url,
+        "video_data_url": video_data_url,
         "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}",
-        "duration_sec": duration_sec,
     }
 
 
@@ -2738,10 +2798,8 @@ async def _run_scene_video_task(
         blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/scene_video.mp4"
         bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
 
-        from core.storage import generate_signed_url
-        video_data_url = generate_signed_url(bucket_name, blob_path)
         buster = uuid.uuid4().hex[:8]
-        video_data_url += f"&_cb={buster}" if "?" in video_data_url else f"?_cb={buster}"
+        video_data_url = generate_signed_url(bucket_name, blob_path, extra_params={"_cb": buster})
         bucket.blob(task_blob_path).upload_from_string(json.dumps({
             "status": "done",
             "video_data_url": video_data_url,
@@ -3103,12 +3161,8 @@ async def admin_scene_video_upload(
     blob_path = f"pipeline/{order_id}/scenes/{chapter_index}_{scene_index}/{language}/scene_video.mp4"
     bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
 
-    from core.storage import generate_signed_url
-    video_data_url = generate_signed_url(settings.gcs_temp_bucket, blob_path)
-    # Add cache buster to force browser to reload
-    buster = uuid.uuid4().hex[:8]
-    video_data_url += f"&_cb={buster}" if "?" in video_data_url else f"?_cb={buster}"
+    video_b64 = base64.b64encode(mp4_bytes).decode("utf-8")
     return {
-        "video_data_url": video_data_url,
+        "video_data_url": f"data:video/mp4;base64,{video_b64}",
         "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}",
     }
