@@ -2720,6 +2720,82 @@ async def admin_save_chapter_srt(
     return {"srt_url": srt_url}
 
 
+@router.post("/orders/{order_id}/video-materials/scene/regenerate-prompt")
+async def admin_scene_regenerate_prompt(
+    order_id: str,
+    body: dict,
+    admin: dict        = Depends(get_admin_user),
+    db:   AsyncSession = Depends(get_db),
+):
+    """Regenerate the visual_prompt for a single scene via Gemini."""
+    ch_idx = body.get("chapter_index")
+    s_idx = body.get("scene_index")
+    instruction = body.get("instruction", "")
+
+    if ch_idx is None or s_idx is None:
+        raise HTTPException(400, "chapter_index and scene_index are required")
+
+    from core.storage import get_storage_client
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+
+    blob = bucket.blob(f"pipeline/{order_id}/video_materials.json")
+    if not blob.exists():
+        raise HTTPException(404, "video_materials.json not found")
+
+    materials = json.loads(blob.download_as_text(encoding="utf-8"))
+    chapters = materials.get("chapters", [])
+    chapter = next((ch for ch in chapters if ch["chapter_index"] == ch_idx), None)
+    if not chapter:
+        raise HTTPException(404, f"Chapter {ch_idx} not found")
+    scene = next((s for s in chapter.get("scenes", []) if s["scene_index"] == s_idx), None)
+    if not scene:
+        raise HTTPException(404, f"Scene {ch_idx}.{s_idx} not found")
+
+    narration = scene.get("tracks", {}).get("tai-lo", {}).get("narration_text", "") or scene.get("narration_text", "")
+    current_prompt = scene.get("visual_prompt", "")
+    if not narration:
+        raise HTTPException(400, "Scene has no narration text to base a prompt on")
+
+    character_sheet = materials.get("global_style", {"characters": {}, "environment": ""})
+    from ots_common.video.ltx_prompt_rules import LTX_VISUAL_PROMPT_RULES
+
+    if instruction:
+        instruction_block = f"\nUser instruction (apply this over everything else): {instruction}"
+    else:
+        instruction_block = ""
+
+    regen_prompt = f"""You are a professional video director. Given a scene's narration text, character sheet, and the previous prompt, generate a better LTX-optimized visual prompt.
+
+{LTX_VISUAL_PROMPT_RULES}
+
+Narration: {narration}
+
+Character sheet: {json.dumps(character_sheet, indent=2, ensure_ascii=False)}
+
+Previous prompt (make it better): {current_prompt}{instruction_block}
+
+Output ONLY the new visual_prompt text. No JSON, no commentary."""
+    import google.genai as genai
+    client_genai = genai.Client(api_key=settings.gemini_api_key)
+    response = client_genai.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=regen_prompt,
+        config={"max_output_tokens": 16384, "temperature": 0.3},
+    )
+    new_prompt = response.text.strip() if response.text else ""
+    if not new_prompt:
+        raise HTTPException(500, "Gemini returned empty prompt")
+
+    scene["visual_prompt"] = new_prompt
+    blob.upload_from_string(
+        json.dumps(materials, ensure_ascii=False, indent=2),
+        content_type="application/json",
+    )
+
+    return {"visual_prompt": new_prompt}
+
+
 @router.post("/orders/{order_id}/video-materials/scene/video/upload")
 async def admin_scene_video_upload(
     order_id: str,
