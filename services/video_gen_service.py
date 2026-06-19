@@ -607,7 +607,8 @@ class FalPixVerseImageToVideoClient:
 
     def generate(self, image_url: str, prompt: str, duration_sec: float) -> Optional[bytes]:
         """Generate a video from a reference image + prompt via PixVerse V6 I2V. Returns MP4 bytes or None."""
-        duration = min(int(duration_sec) or 1, 15)
+        import math
+        duration = min(max(math.ceil(duration_sec), 1), 15)
         headers = {
             "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
