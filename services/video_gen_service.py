@@ -407,7 +407,7 @@ def assemble_chapter_video(
             for scene in sorted(scenes, key=lambda s: s["scene_index"]):
                 s_idx = scene["scene_index"]
                 wav_blob = bucket.blob(f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/{language}/narration.wav")
-                jpg_blob = bucket.blob(f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/visual.jpg")
+                jpg_blob = bucket.blob(f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/reference.jpg")
                 if not wav_blob.exists() or not jpg_blob.exists():
                     continue
 
@@ -783,7 +783,7 @@ def merge_chapter_videos(
                         f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/{language}/narration.wav"
                     )
                     jpg_blob = bucket.blob(
-                        f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/visual.jpg"
+                        f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/reference.jpg"
                     )
                     if not wav_blob.exists() or not jpg_blob.exists():
                         continue

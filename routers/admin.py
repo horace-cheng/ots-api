@@ -2513,7 +2513,7 @@ async def admin_scene_assemble(
     bucket = client.bucket(settings.gcs_temp_bucket)
 
     wav_blob = bucket.blob(f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/narration.wav")
-    jpg_blob = bucket.blob(f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/visual.jpg")
+    jpg_blob = bucket.blob(f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/reference.jpg")
 
     if not wav_blob.exists() or not jpg_blob.exists():
         raise HTTPException(400, "Generate TTS and image first before assembling video")
@@ -2938,7 +2938,7 @@ async def admin_clean_video_assets(
     Deletes:
       - pipeline/{order_id}/video_materials.json (if remove_materials=true)
       - pipeline/{order_id}/scenes/** (narration.wav per scene, within language if specified)
-      - pipeline/{order_id}/scenes/**/visual.jpg (shared — only when no language filter)
+      - pipeline/{order_id}/scenes/**/reference.jpg (shared — only when no language filter)
       - orders/{order_id}/chapter_*.mp4 (within language if specified)
       - orders/{order_id}/chapter_*.srt (within language if specified)
     """
@@ -2988,7 +2988,7 @@ async def admin_clean_video_assets(
         blob.delete()
         if blob.name.endswith("narration.wav"):
             deleted["audio"] += 1
-        elif blob.name.endswith("visual.jpg"):
+        elif blob.name.endswith("reference.jpg"):
             deleted["image"] += 1
 
     # ── Chapter videos and SRTs (outputs bucket) ──
