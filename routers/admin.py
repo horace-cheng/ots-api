@@ -2233,12 +2233,6 @@ async def admin_save_video_materials(
     if not materials:
         raise HTTPException(400, "materials field is required")
 
-    # Assign scene_id to scenes that lack one (stable UUID for asset paths)
-    for ch in materials.get("chapters", []):
-        for scene in ch.get("scenes", []):
-            if not scene.get("scene_id"):
-                scene["scene_id"] = str(uuid.uuid4())
-
     raw = json.dumps(materials, ensure_ascii=False, indent=2)
     client = get_storage_client()
     bucket = client.bucket(settings.gcs_temp_bucket)
