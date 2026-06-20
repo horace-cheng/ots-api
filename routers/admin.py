@@ -2139,12 +2139,13 @@ async def admin_get_video_materials(
         ch_idx = ch["chapter_index"]
         for scene in ch.get("scenes", []):
             s_idx = scene["scene_index"]
+            asset_id = scene.get("scene_id") or f"{ch_idx}_{s_idx}"
             tracks = scene.get("tracks", {})
             languages = list(tracks.keys()) if tracks else ["tai-lo"]
             for lang in languages:
                 key = f"{ch_idx}_{s_idx}_{lang}"
                 entry = {"audio_url": None, "audio_duration": None, "video_url": None, "reference_image_url": None}
-                audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{lang}/narration.wav"
+                audio_path = f"pipeline/{order_id}/scenes/{asset_id}/{lang}/narration.wav"
                 audio_blob = temp_bucket.blob(audio_path)
                 if audio_blob.exists():
                     entry["audio_url"] = generate_signed_url(settings.gcs_temp_bucket, audio_path)
@@ -2156,10 +2157,10 @@ async def admin_get_video_materials(
                             entry["audio_duration"] = round(wf.getnframes() / wf.getframerate(), 2)
                     except Exception:
                         entry["audio_duration"] = None
-                video_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{lang}/scene_video.mp4"
+                video_path = f"pipeline/{order_id}/scenes/{asset_id}/{lang}/scene_video.mp4"
                 if temp_bucket.blob(video_path).exists():
                     entry["video_url"] = generate_signed_url(settings.gcs_temp_bucket, video_path)
-                ref_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/reference.jpg"
+                ref_path = f"pipeline/{order_id}/scenes/{asset_id}/reference.jpg"
                 if temp_bucket.blob(ref_path).exists():
                     entry["reference_image_url"] = generate_signed_url(settings.gcs_temp_bucket, ref_path)
                 scene_assets[key] = entry
@@ -2232,6 +2233,12 @@ async def admin_save_video_materials(
     if not materials:
         raise HTTPException(400, "materials field is required")
 
+    # Assign scene_id to scenes that lack one (stable UUID for asset paths)
+    for ch in materials.get("chapters", []):
+        for scene in ch.get("scenes", []):
+            if not scene.get("scene_id"):
+                scene["scene_id"] = str(uuid.uuid4())
+
     raw = json.dumps(materials, ensure_ascii=False, indent=2)
     client = get_storage_client()
     bucket = client.bucket(settings.gcs_temp_bucket)
@@ -2250,8 +2257,8 @@ async def admin_scene_tts(
 ):
     """Generate TTS audio for a single scene.
 
-    Stores audio at `scenes/{ch_idx}_{s_idx}/{language}/narration.wav`
-    so each language track has its own audio file.
+    Stores audio at `scenes/{scene_id or ch_idx_s_idx}/{language}/narration.wav`
+    so each language track has its own audio file and paths survive re-indexing.
     """
     ch_idx = body.get("chapter_index")
     s_idx = body.get("scene_index")
@@ -2264,6 +2271,21 @@ async def admin_scene_tts(
 
     if ch_idx is None or s_idx is None or not text:
         raise HTTPException(400, "chapter_index, scene_index, and text are required")
+
+    # Look up scene_id for stable asset paths
+    from core.storage import get_storage_client
+    sc = get_storage_client()
+    tb = sc.bucket(settings.gcs_temp_bucket)
+    mat_blob = tb.blob(f"pipeline/{order_id}/video_materials.json")
+    asset_id = f"{ch_idx}_{s_idx}"
+    if mat_blob.exists():
+        mat = json.loads(mat_blob.download_as_text(encoding="utf-8"))
+        for ch in mat.get("chapters", []):
+            if ch["chapter_index"] == ch_idx:
+                scene = next((s for s in ch.get("scenes", []) if s["scene_index"] == s_idx), None)
+                if scene and scene.get("scene_id"):
+                    asset_id = scene["scene_id"]
+                break
 
     # Infer language from voice_id if not explicitly provided
     if not language:
@@ -2286,11 +2308,8 @@ async def admin_scene_tts(
     audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
     data_url = f"data:audio/wav;base64,{audio_b64}"
 
-    # Persist to GCS with language in path
-    from core.storage import get_storage_client
-    client = get_storage_client()
-    bucket = client.bucket(settings.gcs_temp_bucket)
-    blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/narration.wav"
+    # Persist to GCS with language in path (using scene_id for stability)
+    blob_path = f"pipeline/{order_id}/scenes/{asset_id}/{language}/narration.wav"
     bucket.blob(blob_path).upload_from_string(wav_bytes, content_type="audio/wav")
 
     return {
@@ -2403,8 +2422,9 @@ async def admin_scene_reference_image(
     img_b64 = base64.b64encode(jpg_bytes).decode("utf-8")
     data_url = f"data:image/jpeg;base64,{img_b64}"
 
-    # Persist to GCS
-    blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/reference.jpg"
+    # Persist to GCS (using scene_id for stability)
+    asset_id = scene.get("scene_id") or f"{ch_idx}_{s_idx}"
+    blob_path = f"pipeline/{order_id}/scenes/{asset_id}/reference.jpg"
     bucket.blob(blob_path).upload_from_string(jpg_bytes, content_type="image/jpeg")
 
     return {"image_data_url": data_url, "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}"}
@@ -2481,7 +2501,8 @@ async def admin_scene_retranslate(
     )
 
     # Clear stale Tai-lo audio asset so it gets regenerated
-    audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/tai-lo/narration.wav"
+    asset_id = scene.get("scene_id") or f"{ch_idx}_{s_idx}"
+    audio_path = f"pipeline/{order_id}/scenes/{asset_id}/tai-lo/narration.wav"
     audio_blob = bucket.blob(audio_path)
     if audio_blob.exists():
         audio_blob.delete()
@@ -2640,11 +2661,13 @@ async def admin_scene_video(
     style_desc = _get_style_prompt(visual_style)
     prompt = f"{prompt}, {style_desc}"
 
-    audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/narration.wav"
+    asset_id = scene.get("scene_id") or f"{ch_idx}_{s_idx}"
+
+    audio_path = f"pipeline/{order_id}/scenes/{asset_id}/{language}/narration.wav"
     if not bucket.blob(audio_path).exists():
         raise HTTPException(400, "TTS audio not found")
 
-    ref_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/reference.jpg"
+    ref_path = f"pipeline/{order_id}/scenes/{asset_id}/reference.jpg"
     if not bucket.blob(ref_path).exists():
         raise HTTPException(400, "Reference image not found")
 
@@ -2659,6 +2682,7 @@ async def admin_scene_video(
         language=language, prompt=prompt,
         task_blob_path=task_blob_path,
         bucket_name=settings.gcs_temp_bucket,
+        asset_id=asset_id,
     ))
 
     return {"task_id": task_id}
@@ -2667,23 +2691,28 @@ async def admin_scene_video(
 async def _run_scene_video_task(
     order_id: str, ch_idx: int, s_idx: int, language: str,
     prompt: str, task_blob_path: str, bucket_name: str,
+    asset_id: str = "",
 ):
-    """Background: fal.ai I2V → overlay TTS → save + write task result."""
+    """Background: fal.ai I2V → overlay TTS → save + write task result.
+
+    Uses `asset_id` (scene UUID or legacy f'{ch_idx}_{s_idx}') for stable paths.
+    """
     import io
     import wave as wave_mod
 
+    scene_path = asset_id or f"{ch_idx}_{s_idx}"
     loop = asyncio.get_event_loop()
     try:
         from core.storage import get_storage_client, generate_signed_url
         bg_client = get_storage_client()
         bucket = bg_client.bucket(bucket_name)
 
-        audio_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/narration.wav"
+        audio_path = f"pipeline/{order_id}/scenes/{scene_path}/{language}/narration.wav"
         audio_bytes = bucket.blob(audio_path).download_as_bytes()
         with wave_mod.open(io.BytesIO(audio_bytes), 'r') as wf:
             audio_dur = wf.getnframes() / wf.getframerate()
 
-        ref_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/reference.jpg"
+        ref_path = f"pipeline/{order_id}/scenes/{scene_path}/reference.jpg"
         ref_url = generate_signed_url(bucket_name, ref_path)
 
         from services.video_gen_service import (
@@ -2701,14 +2730,14 @@ async def _run_scene_video_task(
         if raw_video is None:
             raise RuntimeError("fal.ai returned None")
 
-        raw_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/raw_video.mp4"
+        raw_path = f"pipeline/{order_id}/scenes/{scene_path}/raw_video.mp4"
         bucket.blob(raw_path).upload_from_string(raw_video, content_type="video/mp4")
 
         mp4_bytes = await loop.run_in_executor(None, assemble_scene_video_from_clip, raw_video, audio_bytes)
         if mp4_bytes is None:
             raise RuntimeError("FFmpeg assembly failed")
 
-        blob_path = f"pipeline/{order_id}/scenes/{ch_idx}_{s_idx}/{language}/scene_video.mp4"
+        blob_path = f"pipeline/{order_id}/scenes/{scene_path}/{language}/scene_video.mp4"
         bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
 
         buster = uuid.uuid4().hex[:8]
@@ -2985,10 +3014,12 @@ async def admin_scene_video_upload(
                     break
             break
 
+    upload_asset_id = (scene_obj.get("scene_id") if scene_obj else None) or f"{chapter_index}_{scene_index}"
+
     video_bytes = await file.read()
 
     if merge_audio:
-        audio_path = f"pipeline/{order_id}/scenes/{chapter_index}_{scene_index}/{language}/narration.wav"
+        audio_path = f"pipeline/{order_id}/scenes/{upload_asset_id}/{language}/narration.wav"
         audio_blob = bucket.blob(audio_path)
         if not audio_blob.exists():
             raise HTTPException(400, "TTS audio not found — generate TTS first to merge audio")
@@ -2999,11 +3030,11 @@ async def admin_scene_video_upload(
     else:
         mp4_bytes = video_bytes
 
-    blob_path = f"pipeline/{order_id}/scenes/{chapter_index}_{scene_index}/{language}/scene_video.mp4"
+    blob_path = f"pipeline/{order_id}/scenes/{upload_asset_id}/{language}/scene_video.mp4"
     bucket.blob(blob_path).upload_from_string(mp4_bytes, content_type="video/mp4")
 
     # Also save raw (unmerged) video for inspection, overwriting any old AI-generated file
-    raw_path = f"pipeline/{order_id}/scenes/{chapter_index}_{scene_index}/raw_video.mp4"
+    raw_path = f"pipeline/{order_id}/scenes/{upload_asset_id}/raw_video.mp4"
     bucket.blob(raw_path).upload_from_string(video_bytes, content_type="video/mp4")
 
     from core.storage import generate_signed_url

@@ -417,9 +417,10 @@ def assemble_chapter_video(
             # ── Scene clips ──
             for scene in sorted(scenes, key=lambda s: s["scene_index"]):
                 s_idx = scene["scene_index"]
+                scene_path = scene.get("scene_id") or f"{chapter_index}_{s_idx}"
                 # Try scene video first, fall back to image+audio
                 vid_blob = bucket.blob(
-                    f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/{language}/scene_video.mp4"
+                    f"pipeline/{order_id}/scenes/{scene_path}/{language}/scene_video.mp4"
                 )
                 if vid_blob.exists():
                     vid_path = os.path.join(tmpdir, f"s{chapter_index}_{s_idx}.mp4")
@@ -435,8 +436,8 @@ def assemble_chapter_video(
                     )
                     audio_duration = float(probe.stdout.strip()) if probe.returncode == 0 else 0
                 else:
-                    wav_blob = bucket.blob(f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/{language}/narration.wav")
-                    jpg_blob = bucket.blob(f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/reference.jpg")
+                    wav_blob = bucket.blob(f"pipeline/{order_id}/scenes/{scene_path}/{language}/narration.wav")
+                    jpg_blob = bucket.blob(f"pipeline/{order_id}/scenes/{scene_path}/reference.jpg")
                     if not wav_blob.exists() or not jpg_blob.exists():
                         continue
                     wav_path = os.path.join(tmpdir, f"s{chapter_index}_{s_idx}.wav")
@@ -798,9 +799,10 @@ def merge_chapter_videos(
             # ── Scene clips ──
             for scene in sorted(scenes, key=lambda s: s["scene_index"]):
                 s_idx = scene["scene_index"]
+                scene_path = scene.get("scene_id") or f"{chapter_index}_{s_idx}"
                 # Try scene video first, fall back to image+audio
                 vid_blob = bucket.blob(
-                    f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/{language}/scene_video.mp4"
+                    f"pipeline/{order_id}/scenes/{scene_path}/{language}/scene_video.mp4"
                 )
                 if vid_blob.exists():
                     vid_path = os.path.join(tmpdir, f"s{chapter_index}_{s_idx}.mp4")
@@ -820,10 +822,10 @@ def merge_chapter_videos(
                 else:
                     # Fallback: image + audio loop
                     wav_blob = bucket.blob(
-                        f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/{language}/narration.wav"
+                        f"pipeline/{order_id}/scenes/{scene_path}/{language}/narration.wav"
                     )
                     jpg_blob = bucket.blob(
-                        f"pipeline/{order_id}/scenes/{chapter_index}_{s_idx}/reference.jpg"
+                        f"pipeline/{order_id}/scenes/{scene_path}/reference.jpg"
                     )
                     if not wav_blob.exists() or not jpg_blob.exists():
                         continue
