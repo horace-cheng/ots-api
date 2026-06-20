@@ -451,8 +451,7 @@ def assemble_chapter_video(
                         "-loop", "1", "-i", jpg_path, "-i", wav_path,
                         "-c:v", "libx264", "-tune", "stillimage", "-b:v", "2M",
                         "-c:a", "aac", "-b:a", "192k",
-                        "-pix_fmt", "yuv420p",
-                        "-t", f"{audio_duration:.3f}",
+                        "-pix_fmt", "yuv420p", "-shortest",
                         clip_path,
                     ], desc=f"Scene {chapter_index}.{s_idx} (image fallback)")
                     cf.write(f"file '{clip_path}'\n")
@@ -840,8 +839,7 @@ def merge_chapter_videos(
                         "-loop", "1", "-i", jpg_path, "-i", wav_path,
                         "-c:v", "libx264", "-tune", "stillimage", "-b:v", "2M",
                         "-c:a", "aac", "-b:a", "192k",
-                        "-pix_fmt", "yuv420p",
-                        "-t", f"{scene_dur:.3f}",
+                        "-pix_fmt", "yuv420p", "-shortest",
                         clip_path,
                     ], desc=f"Scene {chapter_index}.{s_idx} (image fallback)")
                     cf.write(f"file '{clip_path}'\n")
