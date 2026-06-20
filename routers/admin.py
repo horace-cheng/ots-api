@@ -2268,9 +2268,9 @@ async def admin_scene_tts(
 
     # Look up scene_id for stable asset paths
     from core.storage import get_storage_client
-    sc = get_storage_client()
-    tb = sc.bucket(settings.gcs_temp_bucket)
-    mat_blob = tb.blob(f"pipeline/{order_id}/video_materials.json")
+    client = get_storage_client()
+    bucket = client.bucket(settings.gcs_temp_bucket)
+    mat_blob = bucket.blob(f"pipeline/{order_id}/video_materials.json")
     asset_id = f"{ch_idx}_{s_idx}"
     if mat_blob.exists():
         mat = json.loads(mat_blob.download_as_text(encoding="utf-8"))
