@@ -239,17 +239,17 @@ def _replicate_image(prompt: str) -> bytes:
 
 
 def generate_image(prompt: str) -> bytes:
-    """Generate image — tries Hugging Face first, then NVIDIA, then Replicate."""
+    """Generate image — tries NVIDIA first, then Hugging Face, then Replicate."""
+    if settings.nvidia_api_token:
+        try:
+            return _nvidia_image(prompt)
+        except Exception as e:
+            logger.warning(f"NVIDIA image gen failed ({e})")
     if settings.hf_api_token:
         try:
             return _hf_image(prompt)
         except Exception as e:
             logger.warning(f"HF image gen failed ({e})")
-    if settings.nvidia_api_token:
-        try:
-            return _nvidia_image(prompt)
-        except Exception as e:
-            logger.warning(f"NVIDIA image gen failed ({e}), falling back to Replicate")
     return _replicate_image(prompt)
 
 
