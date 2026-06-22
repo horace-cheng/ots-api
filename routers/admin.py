@@ -3049,6 +3049,7 @@ async def admin_refresh_signed_url(
 ):
     if order_id not in body.path:
         raise HTTPException(status_code=400, detail="Path must reference this order")
+    from core.storage import generate_signed_url
     bucket = settings.gcs_outputs_bucket if body.path.startswith("orders/") else settings.gcs_temp_bucket
     url = generate_signed_url(bucket, body.path)
     return {"url": url}
