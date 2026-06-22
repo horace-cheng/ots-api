@@ -41,6 +41,7 @@ from models.schemas import (
     TokenUsageDetailResponse, TokenUsageDetailItem,
     GutenbergBookInfo,
     GutenbergChapterItem, GutenbergChapterSegment, GutenbergChaptersResponse,
+    RefreshSignedUrlRequest,
 )
 from services.payment import (
     get_payment_gateway, InvoiceRequest, InvoiceType, InvoiceError
@@ -3038,3 +3039,16 @@ async def admin_scene_video_upload(
         "video_data_url": video_data_url,
         "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}",
     }
+
+@router.post("/admin/orders/{order_id}/video-materials/refresh-signed-url")
+async def admin_refresh_signed_url(
+    order_id: str,
+    body: RefreshSignedUrlRequest,
+    admin = Depends(get_admin_user),
+    db = Depends(get_db),
+):
+    if order_id not in body.path:
+        raise HTTPException(status_code=400, detail="Path must reference this order")
+    bucket = settings.gcs_outputs_bucket if body.path.startswith("orders/") else settings.gcs_temp_bucket
+    url = generate_signed_url(bucket, body.path)
+    return {"url": url}

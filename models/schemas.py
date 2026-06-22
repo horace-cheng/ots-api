@@ -525,3 +525,6 @@ class TokenUsageDetailResponse(BaseModel):
     order_id:          str
     items:             list[TokenUsageDetailItem]
     total:             int
+
+class RefreshSignedUrlRequest(BaseModel):
+    path: str
