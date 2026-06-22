@@ -297,7 +297,7 @@ def assemble_scene_video(audio_bytes: bytes, image_bytes: bytes) -> Optional[byt
              "-b:v", "2M",
              "-c:a", "aac", "-b:a", "192k",
              "-pix_fmt", "yuv420p",
-             "-t", f"{audio_duration:.3f}",
+             "-t", str(audio_duration),
              "-movflags", "+faststart",
              out_path],
             capture_output=True, text=True, timeout=60,
@@ -451,7 +451,8 @@ def assemble_chapter_video(
                         "-loop", "1", "-i", jpg_path, "-i", wav_path,
                         "-c:v", "libx264", "-tune", "stillimage", "-b:v", "2M",
                         "-c:a", "aac", "-b:a", "192k",
-                        "-pix_fmt", "yuv420p", "-shortest",
+                        "-pix_fmt", "yuv420p",
+                        "-t", str(audio_duration),
                         clip_path,
                     ], desc=f"Scene {chapter_index}.{s_idx} (image fallback)")
                     cf.write(f"file '{clip_path}'\n")
@@ -839,7 +840,8 @@ def merge_chapter_videos(
                         "-loop", "1", "-i", jpg_path, "-i", wav_path,
                         "-c:v", "libx264", "-tune", "stillimage", "-b:v", "2M",
                         "-c:a", "aac", "-b:a", "192k",
-                        "-pix_fmt", "yuv420p", "-shortest",
+                        "-pix_fmt", "yuv420p",
+                        "-t", str(scene_dur),
                         clip_path,
                     ], desc=f"Scene {chapter_index}.{s_idx} (image fallback)")
                     cf.write(f"file '{clip_path}'\n")
