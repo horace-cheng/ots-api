@@ -3040,7 +3040,7 @@ async def admin_scene_video_upload(
         "gcs_path": f"gs://{settings.gcs_temp_bucket}/{blob_path}",
     }
 
-@router.post("/admin/orders/{order_id}/video-materials/refresh-signed-url")
+@router.post("/orders/{order_id}/video-materials/refresh-signed-url")
 async def admin_refresh_signed_url(
     order_id: str,
     body: RefreshSignedUrlRequest,
