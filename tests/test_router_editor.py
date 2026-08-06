@@ -670,3 +670,85 @@ class TestLtVersions:
             params={"against": "11111111-1111-1111-1111-111111111001"},
         )
         assert resp.status_code == 404
+
+
+class TestRetranslateLtSegment:
+    """Tests for POST /editor/lt/orders/{order_id}/segments/{index}/retranslate."""
+
+    @staticmethod
+    def _execute_handler(query, *args, **kwargs):
+        from types import SimpleNamespace
+        q = str(query)
+        if "source_lang" in q:
+            row = SimpleNamespace(source_lang="zh-tw", target_lang="en")
+            res = MagicMock()
+            res.fetchone.return_value = row
+            return res
+        if "UPDATE qa_flags" in q:
+            res = MagicMock()
+            res.fetchall.return_value = [1, 2]
+            return res
+        # assignment verification -> allowed
+        res = MagicMock()
+        res.fetchone.return_value = MagicMock()
+        return res
+
+    @patch("services.lt_segment_retranslate.retranslate_segment", return_value="He stood on the hill.")
+    def test_success(self, mock_svc, mock_db):
+        mock_db.execute.side_effect = self._execute_handler
+        client = _make_lt_app(mock_db)
+        resp = client.post("/editor/lt/orders/order-001/segments/1/retranslate?role=editor")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["index"] == 1
+        assert body["translated"] == "He stood on the hill."
+        assert body["flags_resolved"] == 2
+
+    def test_access_denied(self, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+        client = _make_lt_app(mock_db)
+        resp = client.post("/editor/lt/orders/order-001/segments/1/retranslate?role=editor")
+        assert resp.status_code == 403
+
+    def test_index_out_of_range(self, mock_db):
+        def handler(query, *args, **kwargs):
+            from types import SimpleNamespace
+            q = str(query)
+            if "source_lang" in q:
+                row = SimpleNamespace(source_lang="zh-tw", target_lang="en")
+                res = MagicMock()
+                res.fetchone.return_value = row
+                return res
+            res = MagicMock()
+            res.fetchone.return_value = MagicMock()
+            return res
+
+        mock_db.execute.side_effect = handler
+        with patch("services.lt_segment_retranslate.retranslate_segment",
+                   side_effect=ValueError("Segment index 99 not found")):
+            client = _make_lt_app(mock_db)
+            resp = client.post("/editor/lt/orders/order-001/segments/99/retranslate?role=editor")
+        assert resp.status_code == 404
+        assert "not found" in resp.json()["detail"].lower()
+
+    def test_gemini_failure(self, mock_db):
+        from services.lt_segment_retranslate import SegmentRetranslateError
+
+        def handler(query, *args, **kwargs):
+            from types import SimpleNamespace
+            q = str(query)
+            if "source_lang" in q:
+                row = SimpleNamespace(source_lang="zh-tw", target_lang="en")
+                res = MagicMock()
+                res.fetchone.return_value = row
+                return res
+            res = MagicMock()
+            res.fetchone.return_value = MagicMock()
+            return res
+
+        mock_db.execute.side_effect = handler
+        with patch("services.lt_segment_retranslate.retranslate_segment",
+                   side_effect=SegmentRetranslateError("empty response")):
+            client = _make_lt_app(mock_db)
+            resp = client.post("/editor/lt/orders/order-001/segments/1/retranslate?role=editor")
+        assert resp.status_code == 502

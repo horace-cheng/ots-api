@@ -313,6 +313,12 @@ class QASegmentsBatchUpdate(BaseModel):
     segments: List[QASegmentUpdate]
 
 
+class SegmentRetranslateResponse(BaseModel):
+    index:      int
+    translated: str
+    flags_resolved: int = 0
+
+
 class EditorAssignRequest(BaseModel):
     editor_id: Optional[str] = None
     qa_id:     Optional[str] = None

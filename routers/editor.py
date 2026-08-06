@@ -25,6 +25,7 @@ from services.translation_versions import (
 from models.schemas import (
     OrderDetail, OrderListResponse,
     QASegment, QASegmentListResponse, QASegmentsBatchUpdate,
+    SegmentRetranslateResponse,
     MessageResponse, QAFlagResponse, EditorAssignRequest,
     UserListResponse, UserListItem,
     AssignmentResponse, AssignmentListResponse,
@@ -616,6 +617,81 @@ async def update_lt_order_segments(
 
     storage.write_temp_json(order_id, "translations.json", list(trans_map.values()))
     return MessageResponse(message="Segments updated")
+
+
+@router.post("/lt/orders/{order_id}/segments/{index}/retranslate", response_model=SegmentRetranslateResponse)
+async def retranslate_lt_segment(
+    order_id: str,
+    index:   int,
+    role:    str                 = Query("editor"),
+    user:    dict       = Depends(get_lt_user),
+    db:      AsyncSession = Depends(get_db),
+):
+    """Re-translate a single Literary Track segment via Gemini (editor only)."""
+    if role == "proofreader":
+        where_clause = "a.proofreader_id = :user_id OR :is_admin = true"
+    else:
+        where_clause = "a.editor_id = :user_id OR :is_admin = true"
+
+    # 1. Verify assignment
+    res = await db.execute(text(f"""
+        SELECT a.status FROM assignments a
+        JOIN orders o ON o.id = a.order_id
+        WHERE o.id = :id AND o.track_type = 'literary'
+          AND ({where_clause})
+    """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+    if not res.fetchone():
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # 2. Load order language pair
+    order_res = await db.execute(text("""
+        SELECT source_lang, target_lang FROM orders WHERE id = :id
+    """), {"id": order_id})
+    order_row = order_res.fetchone()
+    if not order_row:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    # 3. Run retranslation
+    from services.lt_segment_retranslate import (
+        retranslate_segment, SegmentRetranslateError,
+    )
+
+    try:
+        new_text = retranslate_segment(
+            order_id,
+            index,
+            order_row.source_lang,
+            order_row.target_lang,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except SegmentRetranslateError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    # 4. Auto-resolve must_fix missing_translation/untranslated flags
+    flags_resolved = 0
+    if new_text.strip():
+        resolved = await db.execute(text("""
+            UPDATE qa_flags qf
+            SET resolved = true,
+                resolved_at = NOW(),
+                reviewer_note = COALESCE(reviewer_note, 'auto-resolved via retranslate')
+            FROM pipeline_jobs pj
+            WHERE pj.id = qf.job_id
+              AND pj.order_id = :order_id
+              AND qf.paragraph_index = :index
+              AND qf.flag_level = 'must_fix'
+              AND qf.flag_type IN ('missing_translation', 'untranslated')
+              AND qf.resolved = false
+            RETURNING qf.id
+        """), {"order_id": order_id, "index": index})
+        flags_resolved = len(resolved.fetchall())
+        await db.commit()
+
+    logger.info(f"Retranslate segment {index + 1} for order {order_id}: flags_resolved={flags_resolved}")
+    return SegmentRetranslateResponse(
+        index=index, translated=new_text, flags_resolved=flags_resolved,
+    )
 
 
 @router.post("/lt/orders/{order_id}/complete", response_model=MessageResponse)
