@@ -9,11 +9,41 @@ pattern, same as ots-common).
 
 import logging
 import re
+import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 
 from core import storage
+
+try:
+    from ots_common.rag.file_search import (
+        get_or_create_file_search_store as _get_or_create_file_search_store,
+        upload_raw_file_to_store as _upload_raw_file_to_store,
+        file_search_tool as _file_search_tool,
+    )
+except ImportError:
+    _candidates = [
+        Path(__file__).resolve().parent.parent / "ots-common",          # submodule: ots-api/ots-common/
+        Path(__file__).resolve().parent.parent.parent / "ots-common",  # dev: repo root
+    ]
+    for _root in _candidates:
+        if _root.exists():
+            sys.path.insert(0, str(_root))
+            try:
+                from ots_common.rag.file_search import (
+                    get_or_create_file_search_store as _get_or_create_file_search_store,
+                    upload_raw_file_to_store as _upload_raw_file_to_store,
+                    file_search_tool as _file_search_tool,
+                )
+                break
+            except ImportError:
+                sys.path.pop(0)
+    else:
+        _get_or_create_file_search_store = None
+        _upload_raw_file_to_store = None
+        _file_search_tool = None
 
 logger = logging.getLogger(__name__)
 
@@ -202,8 +232,106 @@ def _clean_translation(text: str) -> str:
     return cleaned.strip()
 
 
-def _call_gemini(prompt: str) -> str:
-    """Default Gemini client wrapper (injectable for tests)."""
+def _resolve_file_search_store(order_id: str) -> Optional[str]:
+    """Return the per-order Gemini File Search store (get-or-create).
+
+    Uses the same store name the pipeline creates/uses, so both services share
+    one index per order. Returns None (non-fatal) when the shared helper module
+    is unavailable or the GenAI store call fails — the retranslate then runs
+    without RAG rather than failing the editor request.
+    """
+    if _get_or_create_file_search_store is None:
+        logger.warning("ots_common File Search helpers unavailable — retranslate running without RAG")
+        return None
+    try:
+        import google.genai as genai
+
+        from core.config import settings
+
+        client = genai.Client(api_key=settings.gemini_api_key)
+        return _get_or_create_file_search_store(client, order_id, settings.env)
+    except Exception as e:
+        logger.warning(f"File Search store resolution failed (non-fatal): {e}")
+        return None
+
+
+def _load_indexed_files(order_id: str) -> list[dict]:
+    """Read the tracked list of already-indexed support files (name + md5)."""
+    try:
+        data = storage.read_temp_json(order_id, "file_search_indexed.json")
+        if isinstance(data, list):
+            return [f for f in data if isinstance(f, dict)]
+    except Exception as e:
+        logger.warning(f"Indexed-files read failed (non-fatal): {e}")
+    return []
+
+
+def _save_indexed_files(order_id: str, indexed: list[dict]) -> None:
+    """Persist the tracked list of already-indexed support files."""
+    try:
+        storage.write_temp_json(order_id, "file_search_indexed.json", indexed)
+    except Exception as e:
+        logger.warning(f"Indexed-files save failed (non-fatal): {e}")
+
+
+def _sync_support_files(order_id: str, store_name: str) -> None:
+    """Index the order's raw support files into the File Search store.
+
+    Uploads original bytes of every file under ``orders/{order_id}/support/``
+    (arbitrary publisher formats — DOCX, PDF, XLSX, images, ...) letting the
+    hosted multi-modal File Search index them as-is. Idempotent: tracks
+    (name, md5) in temp ``file_search_indexed.json`` and skips blobs already
+    indexed. Any failure is non-fatal.
+    """
+    if _upload_raw_file_to_store is None:
+        return
+    try:
+        import google.genai as genai
+
+        from core.config import settings
+        from core.storage import get_storage_client
+
+        client = genai.Client(api_key=settings.gemini_api_key)
+        bucket = get_storage_client().bucket(settings.gcs_uploads_bucket)
+        blobs = list(bucket.list_blobs(prefix=f"orders/{order_id}/support/"))
+        if not blobs:
+            return
+
+        indexed = _load_indexed_files(order_id)
+        indexed_keys = {(f.get("name"), f.get("md5")) for f in indexed}
+        changed = False
+        for blob in blobs:
+            if blob.name.endswith("/"):
+                continue
+            filename = blob.name.split("/")[-1]
+            md5 = getattr(blob, "md5_hash", "") or ""
+            if (filename, md5) in indexed_keys:
+                continue
+            raw = blob.download_as_bytes()
+            _upload_raw_file_to_store(
+                client, store_name, raw, filename,
+                blob.content_type or "application/octet-stream",
+            )
+            indexed.append({"name": filename, "md5": md5})
+            indexed_keys.add((filename, md5))
+            changed = True
+            logger.info(f"Indexed support file into File Search store {store_name}: {filename}")
+        if changed:
+            _save_indexed_files(order_id, indexed)
+    except Exception as e:
+        logger.warning(f"Support file sync to File Search failed (non-fatal): {e}")
+
+
+def _call_gemini(prompt: str, store_name: Optional[str] = None) -> str:
+    """Default Gemini client wrapper (injectable for tests).
+
+    When ``store_name`` is given (a per-order Gemini File Search store), the
+    call is made with a ``FileSearch`` tool so Gemini can retrieve from the
+    order's raw support files (glossaries, name tables, style guides). The
+    reference context is retrieved by the model rather than inlined into the
+    prompt, which avoids the prompt-size/content-policy problems of inline
+    inlining and keeps arbitrary publisher file formats working.
+    """
     from google.genai import types
 
     from core.config import settings
@@ -214,13 +342,19 @@ def _call_gemini(prompt: str) -> str:
     import google.genai as genai
 
     client = genai.Client(api_key=settings.gemini_api_key)
+    config_kwargs: dict = {
+        "max_output_tokens": MAX_OUTPUT_TOKENS,
+        "temperature": 0.1,
+    }
+    if store_name and _file_search_tool is not None:
+        try:
+            config_kwargs["tools"] = [_file_search_tool(store_name)]
+        except Exception as e:
+            logger.warning(f"File Search tool setup failed (non-fatal), continuing without RAG: {e}")
     response = client.models.generate_content(
         model=MODEL_NAME,
         contents=prompt,
-        config=types.GenerateContentConfig(
-            max_output_tokens=MAX_OUTPUT_TOKENS,
-            temperature=0.1,
-        ),
+        config=types.GenerateContentConfig(**config_kwargs),
     )
     if not getattr(response, "candidates", None) or not getattr(response, "text", None):
         fb = getattr(response, "prompt_feedback", None)
@@ -343,7 +477,22 @@ def retranslate_segment(
         context_text      = "(none available)",
     )
 
-    caller = translate_func or _call_gemini
+    # The real Gemini path (not injected test callers) attaches the order's
+    # File Search store so the model can retrieve publisher reference files
+    # (glossaries, name tables, style guides) via RAG instead of inlining.
+    # Injected translate_func callers control their own prompt.
+    store_name = None
+    if translate_func is None:
+        store_name = _resolve_file_search_store(order_id)
+        if store_name:
+            _sync_support_files(order_id, store_name)
+
+    def _caller(p: str) -> str:
+        if translate_func is not None:
+            return translate_func(p)
+        return _call_gemini(p, store_name=store_name)
+
+    caller = _caller
     fallback_caller = fallback_translate_func or _call_replicate
 
     def _attempt(p: str) -> str:
