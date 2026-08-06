@@ -104,6 +104,18 @@ Segment to translate:
 
 {target_lang} translation:"""
 
+# Appended to the prompt only when the order's File Search store is available.
+# The File Search tool alone does not reliably steer the model — gemini-3.5-flash
+# frequently translates character names from its own knowledge (阿章 → "Ah-Chang")
+# instead of consulting the attached reference. The explicit instruction forces
+# it to retrieve the publisher's name table/glossary and adopt its romanizations.
+REFERENCE_FILES_INSTRUCTION = (
+    "IMPORTANT — The publisher's reference files (character name table, glossary, style guide) are "
+    "attached to this request via file-search. Consult them BEFORE translating and use EXACTLY the "
+    "romanizations and terms they provide for character names, place names, and glossary terms "
+    "(e.g. 阿章 = A-tsiong). Never substitute a different romanization.\n"
+)
+
 
 class SegmentRetranslateError(Exception):
     """Raised when the segment cannot be re-translated (blocked, empty, etc.)."""
@@ -486,6 +498,10 @@ def retranslate_segment(
         store_name = _resolve_file_search_store(order_id)
         if store_name:
             _sync_support_files(order_id, store_name)
+
+    if store_name:
+        prompt += REFERENCE_FILES_INSTRUCTION
+        no_context_prompt += REFERENCE_FILES_INSTRUCTION
 
     def _caller(p: str) -> str:
         if translate_func is not None:

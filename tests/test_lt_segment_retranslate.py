@@ -69,6 +69,8 @@ class TestRetranslateSegment:
         mock_sync.assert_called_once_with("order-1", "stores/order-1")
         assert mock_gemini.call_args.kwargs["store_name"] == "stores/order-1"
         assert mock_write.call_count == 2
+        from services.lt_segment_retranslate import REFERENCE_FILES_INSTRUCTION
+        assert REFERENCE_FILES_INSTRUCTION in mock_gemini.call_args.args[0]
 
     @patch("core.storage.write_temp_json")
     @patch("core.storage.read_temp_json")
@@ -81,6 +83,8 @@ class TestRetranslateSegment:
         assert result.translated == "He stood on the hill, gazing afar."
         mock_sync.assert_not_called()
         assert mock_gemini.call_args.kwargs["store_name"] is None
+        from services.lt_segment_retranslate import REFERENCE_FILES_INSTRUCTION
+        assert REFERENCE_FILES_INSTRUCTION not in mock_gemini.call_args.args[0]
 
     @patch("core.storage.write_temp_json")
     @patch("core.storage.read_temp_json")
