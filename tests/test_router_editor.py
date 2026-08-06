@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from core.database import get_db
 from routers.auth import get_editor_user, get_current_user, get_lt_user, get_qa_user, get_reviewer_user
 from routers.editor import router
+from services.lt_segment_retranslate import RetranslateResult
 
 MOCK_EDITOR_USER = {
     "uid": "editor-uid",
@@ -672,6 +673,41 @@ class TestLtVersions:
         assert resp.status_code == 404
 
 
+class TestUpdateLtOrderSegments:
+    """Tests for PATCH /editor/lt/orders/{order_id}/segments (draft save).
+
+    Draft saves must NOT require comments on flagged segments — that check is
+    enforced only when the editor completes the assignment (POST /complete).
+    """
+
+    @patch("core.storage.write_temp_json")
+    @patch("core.storage.read_temp_json")
+    def test_draft_save_allows_flagged_segment_without_comment(self, mock_read, mock_write, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = MagicMock()
+        mock_read.return_value = [{"index": 1, "translated": "old", "editor_comments": ""}]
+        client = _make_lt_app(mock_db)
+        resp = client.patch(
+            "/editor/lt/orders/order-001/segments?role=editor",
+            json={"segments": [{"index": 1, "translated": "new", "editor_comments": ""}]},
+        )
+        assert resp.status_code == 200
+        written = mock_write.call_args.args[2]
+        assert written[0]["translated"] == "new"
+        assert written[0]["editor_comments"] == ""
+
+    @patch("core.storage.write_temp_json")
+    @patch("core.storage.read_temp_json")
+    def test_draft_save_access_denied(self, mock_read, mock_write, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+        client = _make_lt_app(mock_db)
+        resp = client.patch(
+            "/editor/lt/orders/order-001/segments?role=editor",
+            json={"segments": [{"index": 1, "translated": "new"}]},
+        )
+        assert resp.status_code == 403
+        mock_write.assert_not_called()
+
+
 class TestRetranslateLtSegment:
     """Tests for POST /editor/lt/orders/{order_id}/segments/{index}/retranslate."""
 
@@ -693,7 +729,8 @@ class TestRetranslateLtSegment:
         res.fetchone.return_value = MagicMock()
         return res
 
-    @patch("services.lt_segment_retranslate.retranslate_segment", return_value="He stood on the hill.")
+    @patch("services.lt_segment_retranslate.retranslate_segment",
+           return_value=RetranslateResult(translated="He stood on the hill."))
     def test_success(self, mock_svc, mock_db):
         mock_db.execute.side_effect = self._execute_handler
         client = _make_lt_app(mock_db)
@@ -703,6 +740,16 @@ class TestRetranslateLtSegment:
         assert body["index"] == 1
         assert body["translated"] == "He stood on the hill."
         assert body["flags_resolved"] == 2
+        assert body["used_fallback"] is False
+
+    @patch("services.lt_segment_retranslate.retranslate_segment",
+           return_value=RetranslateResult(translated="He stood on the hill.", used_fallback=True))
+    def test_fallback_flag_reported(self, mock_svc, mock_db):
+        mock_db.execute.side_effect = self._execute_handler
+        client = _make_lt_app(mock_db)
+        resp = client.post("/editor/lt/orders/order-001/segments/1/retranslate?role=editor")
+        assert resp.status_code == 200
+        assert resp.json()["used_fallback"] is True
 
     def test_access_denied(self, mock_db):
         mock_db.execute.return_value.fetchone.return_value = None
@@ -752,3 +799,26 @@ class TestRetranslateLtSegment:
             client = _make_lt_app(mock_db)
             resp = client.post("/editor/lt/orders/order-001/segments/1/retranslate?role=editor")
         assert resp.status_code == 502
+
+    def test_content_blocked_422(self, mock_db):
+        from services.lt_segment_retranslate import SegmentContentBlocked
+
+        def handler(query, *args, **kwargs):
+            from types import SimpleNamespace
+            q = str(query)
+            if "source_lang" in q:
+                row = SimpleNamespace(source_lang="zh-tw", target_lang="en")
+                res = MagicMock()
+                res.fetchone.return_value = row
+                return res
+            res = MagicMock()
+            res.fetchone.return_value = MagicMock()
+            return res
+
+        mock_db.execute.side_effect = handler
+        with patch("services.lt_segment_retranslate.retranslate_segment",
+                   side_effect=SegmentContentBlocked("content blocked by Gemini safety policy")):
+            client = _make_lt_app(mock_db)
+            resp = client.post("/editor/lt/orders/order-001/segments/1/retranslate?role=editor")
+        assert resp.status_code == 422
+        assert "safety" in resp.json()["detail"].lower()

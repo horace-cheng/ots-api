@@ -588,25 +588,9 @@ async def update_lt_order_segments(
     if not translations:
         raise HTTPException(status_code=404, detail="Translations not found")
 
-    must_fix_indices = set()
-    flags_res = await db.execute(text("""
-        SELECT DISTINCT qf.paragraph_index FROM qa_flags qf
-        JOIN pipeline_jobs pj ON pj.id = qf.job_id
-        WHERE pj.order_id = :order_id
-          AND qf.flag_level = 'must_fix'
-          AND qf.resolved = false
-    """), {"order_id": order_id})
-    for row in flags_res.fetchall():
-        must_fix_indices.add(row[0])
-
     trans_map = {t["index"]: t for t in translations}
     for up in body.segments:
         if up.index in trans_map:
-            if role == "editor" and up.index in must_fix_indices and not (up.editor_comments or "").strip():
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Segment {up.index + 1}: comments are required for flagged segments"
-                )
             trans_map[up.index]["translated"] = up.translated
             if up.comments is not None:
                 trans_map[up.index]["comments"] = up.comments
@@ -653,18 +637,21 @@ async def retranslate_lt_segment(
 
     # 3. Run retranslation
     from services.lt_segment_retranslate import (
-        retranslate_segment, SegmentRetranslateError,
+        retranslate_segment, SegmentRetranslateError, SegmentContentBlocked,
     )
 
     try:
-        new_text = retranslate_segment(
+        result = retranslate_segment(
             order_id,
             index,
             order_row.source_lang,
             order_row.target_lang,
         )
+        new_text = result.translated
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except SegmentContentBlocked as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except SegmentRetranslateError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -691,6 +678,7 @@ async def retranslate_lt_segment(
     logger.info(f"Retranslate segment {index + 1} for order {order_id}: flags_resolved={flags_resolved}")
     return SegmentRetranslateResponse(
         index=index, translated=new_text, flags_resolved=flags_resolved,
+        used_fallback=result.used_fallback,
     )
 
 

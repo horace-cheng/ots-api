@@ -317,6 +317,7 @@ class SegmentRetranslateResponse(BaseModel):
     index:      int
     translated: str
     flags_resolved: int = 0
+    used_fallback: bool = False
 
 
 class EditorAssignRequest(BaseModel):
