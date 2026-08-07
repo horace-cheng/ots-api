@@ -859,3 +859,203 @@ class TestRetranslateLtSegment:
             resp = client.post("/editor/lt/orders/order-001/segments/1/retranslate?role=editor")
         assert resp.status_code == 422
         assert "safety" in resp.json()["detail"].lower()
+
+
+class TestUpdateLtSegmentSource:
+    """Tests for PATCH /editor/lt/orders/{order_id}/segments/{index}/source."""
+
+    SEGMENTS = [
+        {"index": 0, "text": "Old source", "char_count": 10},
+        {"index": 1, "text": "Keep me", "char_count": 7},
+    ]
+    TRANSLATIONS = [
+        {"index": 0, "translated": "Old trans", "source": "Old source"},
+        {"index": 1, "translated": "Keep trans", "source": "Keep me"},
+    ]
+    OVERRIDES = {"0": {"original": "Old source", "edited": "Old source"}}
+
+    @staticmethod
+    def _reads():
+        from types import SimpleNamespace
+        res = MagicMock()
+        res.fetchone.return_value = SimpleNamespace(status="editing")
+        return res
+
+    def test_editor_edits_source_updates_all_files(self, mock_db):
+        mock_db.execute.return_value = self._reads()
+        with patch("core.storage.read_temp_json", side_effect=[
+            list(self.SEGMENTS), list(self.TRANSLATIONS), dict(self.OVERRIDES),
+        ]) as mock_read, \
+             patch("core.storage.write_temp_json") as mock_write:
+            client = _make_lt_app(mock_db)
+            resp = client.patch(
+                "/editor/lt/orders/order-001/segments/0/source?role=editor",
+                json={"source": "  New source  "},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"index": 0, "source": "New source", "source_edited": True}
+
+        written_segments = mock_write.call_args_list[0].args[2]
+        written_trans = mock_write.call_args_list[1].args[2]
+        written_overrides = mock_write.call_args_list[2].args[2]
+        # segments.json canonical source updated
+        assert written_segments[0]["text"] == "New source"
+        assert written_segments[0]["char_count"] == len("New source")
+        assert written_segments[1]["text"] == "Keep me"
+        # translations.json source synced + stale flag set
+        assert written_trans[0]["source"] == "New source"
+        assert written_trans[0]["source_edited"] is True
+        assert written_trans[1]["source"] == "Keep me"
+        # audit trail keeps the original for revert
+        assert written_overrides["0"]["original"] == "Old source"
+        assert written_overrides["0"]["edited"] == "New source"
+        assert written_overrides["0"]["edited_by"] == "lt-db-id"
+
+    def test_editor_edit_reuses_existing_original(self, mock_db):
+        """A second edit preserves the original source in the audit trail."""
+        mock_db.execute.return_value = self._reads()
+        with patch("core.storage.read_temp_json", side_effect=[
+            list(self.SEGMENTS), list(self.TRANSLATIONS),
+            {"0": {"original": "Old source", "edited": "First fix"}},
+        ]) as mock_read, \
+             patch("core.storage.write_temp_json") as mock_write:
+            client = _make_lt_app(mock_db)
+            resp = client.patch(
+                "/editor/lt/orders/order-001/segments/0/source?role=editor",
+                json={"source": "Second fix"},
+            )
+
+        assert resp.status_code == 200
+        written_overrides = mock_write.call_args_list[2].args[2]
+        assert written_overrides["0"]["original"] == "Old source"
+        assert written_overrides["0"]["edited"] == "Second fix"
+
+    def test_admin_allowed(self, mock_db):
+        from types import SimpleNamespace
+        admin_user = dict(MOCK_LT_USER, is_admin=True)
+        mock_db.execute.return_value = self._reads()
+        with patch("core.storage.read_temp_json", side_effect=[
+            list(self.SEGMENTS), list(self.TRANSLATIONS), dict(self.OVERRIDES),
+        ]), \
+             patch("core.storage.write_temp_json") as mock_write:
+            app = FastAPI()
+            app.include_router(router)
+            async def override_db():
+                yield mock_db
+            from core.database import get_db
+            from routers.auth import get_lt_user
+            app.dependency_overrides[get_db] = override_db
+            app.dependency_overrides[get_lt_user] = lambda: admin_user
+            client = TestClient(app)
+            resp = client.patch(
+                "/editor/lt/orders/order-001/segments/0/source?role=editor",
+                json={"source": "Admin edit"},
+            )
+        assert resp.status_code == 200
+
+    def test_proofreader_role_denied(self, mock_db):
+        mock_db.execute.return_value = self._reads()
+        with patch("core.storage.read_temp_json", side_effect=[
+            list(self.SEGMENTS), list(self.TRANSLATIONS), dict(self.OVERRIDES),
+        ]), \
+             patch("core.storage.write_temp_json") as mock_write:
+            client = _make_lt_app(mock_db)
+            resp = client.patch(
+                "/editor/lt/orders/order-001/segments/0/source?role=proofreader",
+                json={"source": "New source"},
+            )
+        assert resp.status_code == 403
+        mock_write.assert_not_called()
+
+    def test_access_denied(self, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = None
+        with patch("core.storage.read_temp_json", side_effect=[
+            list(self.SEGMENTS), list(self.TRANSLATIONS), dict(self.OVERRIDES),
+        ]), \
+             patch("core.storage.write_temp_json") as mock_write:
+            client = _make_lt_app(mock_db)
+            resp = client.patch(
+                "/editor/lt/orders/order-001/segments/0/source?role=editor",
+                json={"source": "New source"},
+            )
+        assert resp.status_code == 403
+        mock_write.assert_not_called()
+
+    def test_index_out_of_range(self, mock_db):
+        mock_db.execute.return_value = self._reads()
+        with patch("core.storage.read_temp_json", side_effect=[
+            list(self.SEGMENTS), list(self.TRANSLATIONS), dict(self.OVERRIDES),
+        ]), \
+             patch("core.storage.write_temp_json") as mock_write:
+            client = _make_lt_app(mock_db)
+            resp = client.patch(
+                "/editor/lt/orders/order-001/segments/99/source?role=editor",
+                json={"source": "New source"},
+            )
+        assert resp.status_code == 404
+        mock_write.assert_not_called()
+
+    def test_empty_source_rejected(self, mock_db):
+        mock_db.execute.return_value = self._reads()
+        with patch("core.storage.read_temp_json", side_effect=[
+            list(self.SEGMENTS), list(self.TRANSLATIONS), dict(self.OVERRIDES),
+        ]), \
+             patch("core.storage.write_temp_json") as mock_write:
+            client = _make_lt_app(mock_db)
+            resp = client.patch(
+                "/editor/lt/orders/order-001/segments/0/source?role=editor",
+                json={"source": "   "},
+            )
+        assert resp.status_code == 400
+        mock_write.assert_not_called()
+
+    def test_missing_translation_entry(self, mock_db):
+        mock_db.execute.return_value = self._reads()
+        with patch("core.storage.read_temp_json", side_effect=[
+            list(self.SEGMENTS), [{"index": 2, "translated": "orphan"}], dict(self.OVERRIDES),
+        ]), \
+             patch("core.storage.write_temp_json") as mock_write:
+            client = _make_lt_app(mock_db)
+            resp = client.patch(
+                "/editor/lt/orders/order-001/segments/0/source?role=editor",
+                json={"source": "New source"},
+            )
+        assert resp.status_code == 404
+        mock_write.assert_not_called()
+
+    def test_get_segments_exposes_source_edited(self, mock_db):
+        """GET segments surfaces the source_edited flag for badge display."""
+        mock_db.execute.return_value.fetchone.return_value = MagicMock()
+        mock_db.execute.return_value.fetchall.return_value = []
+        with patch("core.storage.read_temp_json", side_effect=[
+            list(self.SEGMENTS),
+            [dict(self.TRANSLATIONS[0], source_edited=True), dict(self.TRANSLATIONS[1])],
+            [{"index": 0, "translated": "raw"}],
+        ]):
+            client = _make_lt_app(mock_db)
+            resp = client.get("/editor/lt/orders/order-001/segments?role=editor&limit=100")
+
+        assert resp.status_code == 200
+        segs = {s["index"]: s for s in resp.json()["segments"]}
+        assert segs[0]["source_edited"] is True
+        assert segs[1]["source_edited"] is False
+
+
+class TestUpdateLtSegmentsClearsSourceEdited:
+    """Saving a manual translation resolves the stale-translation state."""
+
+    @patch("core.storage.write_temp_json")
+    @patch("core.storage.read_temp_json")
+    def test_manual_save_clears_source_edited(self, mock_read, mock_write, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = MagicMock()
+        mock_read.return_value = [{"index": 1, "translated": "old", "source_edited": True}]
+        client = _make_lt_app(mock_db)
+        resp = client.patch(
+            "/editor/lt/orders/order-001/segments?role=editor",
+            json={"segments": [{"index": 1, "translated": "new"}]},
+        )
+        assert resp.status_code == 200
+        written = mock_write.call_args.args[2]
+        assert written[0]["translated"] == "new"
+        assert written[0]["source_edited"] is False

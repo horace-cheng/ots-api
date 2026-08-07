@@ -19,7 +19,8 @@ SEGMENTS = [
 
 TRANSLATIONS = [
     {"index": 0, "translated": "Chapter One\n...", "editor_comments": "ok"},
-    {"index": 1, "translated": "He stood...", "editor_comments": None},
+    {"index": 1, "translated": "He stood...", "editor_comments": None,
+     "source": "他站在山頂，望向遠方。", "source_edited": True},
     {"index": 2, "translated": "The wind...", "editor_comments": None},
 ]
 
@@ -45,6 +46,9 @@ class TestRetranslateSegment:
         # comments preserved, translated updated
         assert written_trans[1]["translated"] == result.translated
         assert written_trans[0]["editor_comments"] == "ok"
+        # source synced from segments.json and stale source_edited cleared
+        assert written_trans[1]["source"] == SEGMENTS[1]["text"]
+        assert written_trans[1]["source_edited"] is False
         # raw now holds the previous translation (from translations.json)
         assert written_raw[1]["translated"] == "He stood..."
 

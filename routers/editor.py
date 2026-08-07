@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import json
 import logging
+from datetime import datetime, timezone
 
 from core.database import get_db
 from core import storage
@@ -25,7 +26,7 @@ from services.translation_versions import (
 from models.schemas import (
     OrderDetail, OrderListResponse,
     QASegment, QASegmentListResponse, QASegmentsBatchUpdate,
-    SegmentRetranslateResponse,
+    SegmentRetranslateResponse, SourceUpdateRequest, SegmentSourceResponse,
     MessageResponse, QAFlagResponse, EditorAssignRequest,
     UserListResponse, UserListItem,
     AssignmentResponse, AssignmentListResponse,
@@ -338,6 +339,7 @@ async def get_assigned_order_segments(
             comments   = t.get("comments"),
             editor_comments = t.get("editor_comments"),
             proofreader_comments = t.get("proofreader_comments"),
+            source_edited = bool(t.get("source_edited", False)),
             flags      = flags_map.get(idx, []),
         ))
 
@@ -517,6 +519,7 @@ async def get_lt_order_segments(
             comments   = t.get("comments"),
             editor_comments = t.get("editor_comments"),
             proofreader_comments = t.get("proofreader_comments"),
+            source_edited = bool(t.get("source_edited", False)),
             flags      = flags_map.get(idx, []),
         ))
 
@@ -592,6 +595,10 @@ async def update_lt_order_segments(
     for up in body.segments:
         if up.index in trans_map:
             trans_map[up.index]["translated"] = up.translated
+            # Saving a manual translation resolves a stale-translation state
+            # caused by a source edit.
+            if trans_map[up.index].get("source_edited"):
+                trans_map[up.index]["source_edited"] = False
             if up.comments is not None:
                 trans_map[up.index]["comments"] = up.comments
             if up.editor_comments is not None:
@@ -704,6 +711,85 @@ async def retranslate_lt_segment(
         index=index, translated=new_text, flags_resolved=flags_resolved,
         used_fallback=result.used_fallback,
     )
+
+
+@router.patch("/lt/orders/{order_id}/segments/{index}/source", response_model=SegmentSourceResponse)
+async def update_lt_segment_source(
+    order_id: str,
+    index:    int,
+    role:     str                 = Query("editor"),
+    body:     SourceUpdateRequest  = ...,
+    user:     dict       = Depends(get_lt_user),
+    db:       AsyncSession = Depends(get_db),
+):
+    """Edit a Literary Track segment's source text (editor only).
+
+    Mutates both segments.json (canonical source consumed by retranslate) and
+    translations.json (source field consumed by delivery/versions), plus an
+    audit trail in source_overrides.json. Marks the translation stale
+    (source_edited=true) until the editor retranslates or manually re-saves.
+    """
+    if role == "proofreader":
+        where_clause = "a.proofreader_id = :user_id OR :is_admin = true"
+    else:
+        where_clause = "a.editor_id = :user_id OR :is_admin = true"
+
+    # 1. Verify assignment (editor role only for this endpoint)
+    res = await db.execute(text(f"""
+        SELECT a.status FROM assignments a
+        JOIN orders o ON o.id = a.order_id
+        WHERE o.id = :id AND o.track_type = 'literary'
+          AND ({where_clause})
+    """), {"id": order_id, "user_id": user["user_id"], "is_admin": user.get("is_admin", False)})
+    if not res.fetchone():
+        raise HTTPException(status_code=403, detail="Access denied")
+    if role == "proofreader":
+        raise HTTPException(status_code=403, detail="Only editors can edit source segments")
+
+    new_source = body.source.strip()
+    if not new_source:
+        raise HTTPException(status_code=400, detail="Source cannot be empty")
+
+    segments = storage.read_temp_json(order_id, "segments.json")
+    translations = storage.read_temp_json(order_id, "translations.json")
+    if not isinstance(segments, list) or not isinstance(translations, list):
+        raise HTTPException(status_code=404, detail="翻譯段落尚未產生，請等待 pipeline 完成後再試")
+
+    seg_map = {s.get("index"): s for s in segments if isinstance(s, dict) and "index" in s}
+    trans_map = {t.get("index"): t for t in translations if isinstance(t, dict) and "index" in t}
+    if index not in seg_map:
+        raise HTTPException(status_code=404, detail=f"Segment index {index} out of range")
+    if index not in trans_map:
+        raise HTTPException(status_code=404, detail=f"Segment {index + 1} has no translation entry")
+
+    orig_source = seg_map[index].get("text", "")
+
+    # 2. Mutate segments.json (canonical source — retranslate reads this)
+    seg_map[index]["text"] = new_source
+    seg_map[index]["char_count"] = len(new_source)
+    storage.write_temp_json(order_id, "segments.json", list(seg_map.values()))
+
+    # 3. Mutate translations.json (source consumed by delivery + versions),
+    #    and mark the translation stale until the editor retranslates.
+    trans_map[index]["source"] = new_source
+    trans_map[index]["source_edited"] = True
+    storage.write_temp_json(order_id, "translations.json", list(trans_map.values()))
+
+    # 4. Audit trail (first edit keeps the original source for revert)
+    overrides = storage.read_temp_json(order_id, "source_overrides.json")
+    if not isinstance(overrides, dict):
+        overrides = {}
+    entry = overrides.get(str(index), {})
+    if not entry.get("original"):
+        entry["original"] = orig_source
+    entry["edited"] = new_source
+    entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+    entry["edited_by"] = user["user_id"]
+    overrides[str(index)] = entry
+    storage.write_temp_json(order_id, "source_overrides.json", overrides)
+
+    logger.info(f"Source edited for segment {index + 1} of order {order_id} by {user['user_id']}")
+    return SegmentSourceResponse(index=index, source=new_source, source_edited=True)
 
 
 @router.post("/lt/orders/{order_id}/complete", response_model=MessageResponse)

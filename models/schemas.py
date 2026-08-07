@@ -293,6 +293,7 @@ class QASegment(BaseModel):
     comments:       Optional[str] = None
     editor_comments: Optional[str] = None
     proofreader_comments: Optional[str] = None
+    source_edited:  Optional[bool] = False
     flags:          List[QAFlagResponse] = []
 
 class QASegmentListResponse(BaseModel):
@@ -318,6 +319,16 @@ class SegmentRetranslateResponse(BaseModel):
     translated: str
     flags_resolved: int = 0
     used_fallback: bool = False
+
+
+class SourceUpdateRequest(BaseModel):
+    source: str
+
+
+class SegmentSourceResponse(BaseModel):
+    index:      int
+    source:     str
+    source_edited: bool = True
 
 
 class EditorAssignRequest(BaseModel):

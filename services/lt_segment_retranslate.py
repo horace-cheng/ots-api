@@ -609,6 +609,11 @@ def retranslate_segment(
 
     old_translated = trans_map[index].get("translated", "")
     trans_map[index]["translated"] = new_text
+    # Retranslating with the (possibly edited) source resolves any stale
+    # source_edited flag and guarantees translations.json source matches
+    # segments.json.
+    trans_map[index]["source"] = source_text
+    trans_map[index]["source_edited"] = False
     storage.write_temp_json(order_id, "translations.json", list(trans_map.values()))
 
     if isinstance(translations_raw, list) and translations_raw:
