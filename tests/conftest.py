@@ -1,6 +1,14 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime, timezone
+import os
+import sys
+
+# Make the ots-common git submodule importable so tests can target the shared
+# helpers directly (matches the service's own two-path import fallback).
+_OTS_COMMON = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ots-common")
+if _OTS_COMMON not in sys.path:
+    sys.path.insert(0, _OTS_COMMON)
 
 
 MOCK_FIREBASE_DECODED = {

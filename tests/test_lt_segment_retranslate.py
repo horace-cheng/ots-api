@@ -354,22 +354,61 @@ class TestCallGemini:
 
 
 class TestTokenUsageRecord:
+    """The service delegates to the shared ots_common build_usage_record, so
+    these tests target the shared function directly (record shape, dict-shape
+    input, env-rate overrides)."""
+
+    @staticmethod
+    def _shared():
+        from ots_common.usage.token_usage import build_usage_record
+        return build_usage_record
+
     def test_none_usage_returns_none(self):
-        from services.lt_segment_retranslate import _token_usage_record
-        assert _token_usage_record("gemini-3.5-flash", None) is None
+        assert self._shared()("gemini-3.5-flash", None) is None
 
     def test_zero_usage_returns_none(self):
         from types import SimpleNamespace
-        from services.lt_segment_retranslate import _token_usage_record
         usage = SimpleNamespace(prompt_token_count=0, candidates_token_count=0, total_token_count=0)
-        assert _token_usage_record("gemini-3.5-flash", usage) is None
+        assert self._shared()("gemini-3.5-flash", usage) is None
 
     def test_missing_total_falls_back_to_sum(self):
         from types import SimpleNamespace
-        from services.lt_segment_retranslate import _token_usage_record
         usage = SimpleNamespace(prompt_token_count=10, candidates_token_count=20, total_token_count=0)
+        rec = self._shared()("gemini-3.5-flash", usage)
+        assert rec["total_tokens"] == 30
+
+    def test_dict_shape_input(self):
+        rec = self._shared()("gemini-3.5-flash", {
+            "prompt_tokens": 100000,
+            "candidates_tokens": 2000,
+            "total_tokens": 102000,
+        })
+        assert rec["total_tokens"] == 102000
+        assert rec["cost_usd"] == 0.056  # 0.50/M * 100K + 3.00/M * 2K
+
+    def test_env_rate_overrides(self, monkeypatch):
+        monkeypatch.setenv("GEMINI_35_FLASH_INPUT_COST", "1.00")
+        monkeypatch.setenv("GEMINI_35_FLASH_OUTPUT_COST", "4.00")
+        rec = self._shared()("gemini-3.5-flash", {
+            "prompt_tokens": 1000, "candidates_tokens": 500, "total_tokens": 1500,
+        })
+        assert rec["input_rate"] == 1.00
+        assert rec["output_rate"] == 4.00
+
+    def test_unknown_model_returns_zero_rates(self):
+        rec = self._shared()("not-a-real-model", {
+            "prompt_tokens": 1000, "candidates_tokens": 0, "total_tokens": 1000,
+        })
+        assert rec["cost_usd"] == 0.0
+        assert rec["input_rate"] == 0.0 and rec["output_rate"] == 0.0
+
+    def test_service_wrapper_still_delegates(self):
+        from types import SimpleNamespace
+        from services.lt_segment_retranslate import _token_usage_record
+        usage = SimpleNamespace(prompt_token_count=10, candidates_token_count=20, total_token_count=30)
         rec = _token_usage_record("gemini-3.5-flash", usage)
         assert rec["total_tokens"] == 30
+        assert rec["cost_usd"] == round(10 / 1_000_000 * 0.50 + 20 / 1_000_000 * 3.00, 6)
 
 
 class TestFileSearchStore:

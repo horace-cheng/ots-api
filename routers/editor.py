@@ -639,6 +639,14 @@ async def retranslate_lt_segment(
     from services.lt_segment_retranslate import (
         retranslate_segment, SegmentRetranslateError, SegmentContentBlocked,
     )
+    try:
+        from ots_common.usage.token_usage import (
+            TOKEN_USAGE_INSERT_SQL as _TOKEN_USAGE_INSERT_SQL,
+            build_insert_sql_params as _build_insert_sql_params,
+        )
+    except ImportError:
+        _TOKEN_USAGE_INSERT_SQL = None
+        _build_insert_sql_params = None
 
     try:
         result = retranslate_segment(
@@ -676,26 +684,16 @@ async def retranslate_lt_segment(
 
     # 5. Record Gemini token usage for this retranslate (non-fatal — a usage
     #    insert failure must never fail an already-successful retranslation).
+    #    Uses the shared SQL + params builders from ots_common; async consumers
+    #    keep their own await db.execute(...) loop.
     for u in result.gemini_usage:
         try:
-            await db.execute(text("""
-                INSERT INTO token_usage
-                    (order_id, job_type, model, prompt_tokens, candidates_tokens,
-                     total_tokens, cost_usd, input_rate, output_rate)
-                VALUES
-                    (:order_id, :job_type, :model, :prompt_tokens, :candidates_tokens,
-                     :total_tokens, :cost_usd, :input_rate, :output_rate)
-            """), {
-                "order_id":          order_id,
-                "job_type":          "lt_retranslate",
-                "model":             u.get("model"),
-                "prompt_tokens":     u.get("prompt_tokens", 0),
-                "candidates_tokens": u.get("candidates_tokens", 0),
-                "total_tokens":      u.get("total_tokens", 0),
-                "cost_usd":          u.get("cost_usd", 0),
-                "input_rate":        u.get("input_rate", 0),
-                "output_rate":       u.get("output_rate", 0),
-            })
+            if _TOKEN_USAGE_INSERT_SQL is None:
+                continue
+            await db.execute(
+                text(_TOKEN_USAGE_INSERT_SQL),
+                _build_insert_sql_params(order_id, "lt_retranslate", u),
+            )
         except Exception as e:
             logger.warning(f"token_usage insert failed (non-fatal): {e}")
 

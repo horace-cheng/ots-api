@@ -8,7 +8,6 @@ pattern, same as ots-common).
 """
 
 import logging
-import os
 import re
 import sys
 import time
@@ -46,18 +45,38 @@ except ImportError:
         _upload_raw_file_to_store = None
         _file_search_tool = None
 
+try:
+    from ots_common.usage.token_usage import (
+        build_usage_record as _build_usage_record,
+        TOKEN_USAGE_INSERT_SQL as _TOKEN_USAGE_INSERT_SQL,
+        build_insert_sql_params as _build_insert_sql_params,
+    )
+except ImportError:
+    _candidates = [
+        Path(__file__).resolve().parent.parent / "ots-common",          # submodule: ots-api/ots-common/
+        Path(__file__).resolve().parent.parent.parent / "ots-common",  # dev: repo root
+    ]
+    for _root in _candidates:
+        if _root.exists():
+            sys.path.insert(0, str(_root))
+            try:
+                from ots_common.usage.token_usage import (
+                    build_usage_record as _build_usage_record,
+                    TOKEN_USAGE_INSERT_SQL as _TOKEN_USAGE_INSERT_SQL,
+                    build_insert_sql_params as _build_insert_sql_params,
+                )
+                break
+            except ImportError:
+                sys.path.pop(0)
+    else:
+        _build_usage_record = None
+        _TOKEN_USAGE_INSERT_SQL = None
+        _build_insert_sql_params = None
+
 logger = logging.getLogger(__name__)
 
 MODEL_NAME = "gemini-3.5-flash"
 MAX_OUTPUT_TOKENS = 16384
-# Unit rates (USD per 1M tokens) used to compute token_usage.cost_usd.
-# Mirrors ots-pipeline/shared/config.py MODEL_PRICING for gemini-3.5-flash.
-MODEL_PRICING = {
-    "gemini-3.5-flash": {
-        "input":  float(os.environ.get("GEMINI_35_FLASH_INPUT_COST", "0.50")),
-        "output": float(os.environ.get("GEMINI_35_FLASH_OUTPUT_COST", "3.00")),
-    },
-}
 # Open-weight fallback model for content-policy-blocked segments. Replicate's
 # hosted Llama 3 70B translates literary content Gemini refuses (verified on
 # the PE-teacher scene that hard-blocks gemini-3.5-flash).
@@ -352,33 +371,14 @@ def _sync_support_files(order_id: str, store_name: str) -> None:
 def _token_usage_record(model: str, usage) -> Optional[dict]:
     """Build a token_usage row dict from a Gemini usage_metadata, or None.
 
-    ``usage`` is a ``google.genai`` ``GenerateContentResponseUsageMetadata``
-    (attributes ``prompt_token_count`` / ``candidates_token_count`` /
-    ``total_token_count``). Cost is computed from ``MODEL_PRICING``; the unit
-    rates are stored alongside for transparent cost display (matches the
-    pipeline's ``log_token_usage``).
+    Delegates to the shared ``ots_common.usage.token_usage.build_usage_record``
+    (accepts a genai usage_metadata or a counts dict; cost from shared model
+    pricing with env overrides). Returns None when usage is falsy or every
+    count is zero.
     """
-    if not usage:
+    if _build_usage_record is None:
         return None
-    prompt_tokens     = int(getattr(usage, "prompt_token_count", 0) or 0)
-    candidates_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
-    total_tokens      = int(getattr(usage, "total_token_count", 0) or 0) or (prompt_tokens + candidates_tokens)
-    if not prompt_tokens and not candidates_tokens:
-        return None
-    rate = MODEL_PRICING.get(model, {"input": 0, "output": 0})
-    input_rate  = float(rate["input"])
-    output_rate = float(rate["output"])
-    cost_usd = (prompt_tokens / 1_000_000 * input_rate) + \
-               (candidates_tokens / 1_000_000 * output_rate)
-    return {
-        "model":             model,
-        "prompt_tokens":     prompt_tokens,
-        "candidates_tokens": candidates_tokens,
-        "total_tokens":      total_tokens,
-        "cost_usd":          round(cost_usd, 6),
-        "input_rate":        input_rate,
-        "output_rate":       output_rate,
-    }
+    return _build_usage_record(model, usage)
 
 
 def _call_gemini(prompt: str, store_name: Optional[str] = None) -> tuple[str, Optional[dict]]:
