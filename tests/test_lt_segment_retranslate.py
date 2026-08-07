@@ -61,10 +61,11 @@ class TestRetranslateSegment:
         mock_read.side_effect = [SEGMENTS, TRANSLATIONS, TRANS_RAW]
         with patch("services.lt_segment_retranslate._resolve_file_search_store", return_value="stores/order-1") as mock_resolve, \
              patch("services.lt_segment_retranslate._sync_support_files") as mock_sync, \
-             patch("services.lt_segment_retranslate._call_gemini", return_value="He stood on the hill, gazing afar.") as mock_gemini:
+             patch("services.lt_segment_retranslate._call_gemini", return_value=("He stood on the hill, gazing afar.", None)) as mock_gemini:
             result = retranslate_segment("order-1", 1, "zh-tw", "en")
         assert result.translated == "He stood on the hill, gazing afar."
         assert result.used_fallback is False
+        assert result.gemini_usage == []
         mock_resolve.assert_called_once_with("order-1")
         mock_sync.assert_called_once_with("order-1", "stores/order-1")
         assert mock_gemini.call_args.kwargs["store_name"] == "stores/order-1"
@@ -78,13 +79,57 @@ class TestRetranslateSegment:
         mock_read.side_effect = [SEGMENTS, TRANSLATIONS, TRANS_RAW]
         with patch("services.lt_segment_retranslate._resolve_file_search_store", return_value=None) as mock_resolve, \
              patch("services.lt_segment_retranslate._sync_support_files") as mock_sync, \
-             patch("services.lt_segment_retranslate._call_gemini", return_value="He stood on the hill, gazing afar.") as mock_gemini:
+             patch("services.lt_segment_retranslate._call_gemini", return_value=("He stood on the hill, gazing afar.", None)) as mock_gemini:
             result = retranslate_segment("order-1", 1, "zh-tw", "en")
         assert result.translated == "He stood on the hill, gazing afar."
         mock_sync.assert_not_called()
         assert mock_gemini.call_args.kwargs["store_name"] is None
         from services.lt_segment_retranslate import REFERENCE_FILES_INSTRUCTION
         assert REFERENCE_FILES_INSTRUCTION not in mock_gemini.call_args.args[0]
+
+    @patch("core.storage.write_temp_json")
+    @patch("core.storage.read_temp_json")
+    def test_real_gemini_path_collects_usage(self, mock_read, mock_write, mock_tm):
+        usage = {
+            "model": "gemini-3.5-flash", "prompt_tokens": 1000, "candidates_tokens": 500,
+            "total_tokens": 1500, "cost_usd": 0.002, "input_rate": 0.50, "output_rate": 3.00,
+        }
+        mock_read.side_effect = [SEGMENTS, TRANSLATIONS, TRANS_RAW]
+        with patch("services.lt_segment_retranslate._resolve_file_search_store", return_value=None), \
+             patch("services.lt_segment_retranslate._sync_support_files"), \
+             patch("services.lt_segment_retranslate._call_gemini", return_value=("He stood on the hill.", usage)):
+            result = retranslate_segment("order-1", 1, "zh-tw", "en")
+        assert result.translated == "He stood on the hill."
+        assert result.gemini_usage == [usage]
+
+    @patch("core.storage.write_temp_json")
+    @patch("core.storage.read_temp_json")
+    def test_injected_translate_func_records_no_usage(self, mock_read, mock_write, mock_tm):
+        mock_read.side_effect = [SEGMENTS, TRANSLATIONS, TRANS_RAW]
+        result = retranslate_segment("order-1", 1, "zh-tw", "en", translate_func=lambda p: "He stood on the hill.")
+        assert result.translated == "He stood on the hill."
+        assert result.gemini_usage == []
+
+    @patch("core.storage.write_temp_json")
+    @patch("core.storage.read_temp_json")
+    def test_real_gemini_path_no_context_retry_records_both_calls(self, mock_read, mock_write, mock_tm):
+        mock_read.side_effect = [SEGMENTS, TRANSLATIONS, TRANS_RAW]
+        mock_tm.return_value = [{"source": "風吹過山林。", "translation": "The wind blew."}]
+        calls = []
+        def fake_gemini(prompt, store_name=None):
+            calls.append(prompt)
+            if len(calls) == 1:
+                return "", {"model": "gemini-3.5-flash", "prompt_tokens": 10, "candidates_tokens": 0,
+                            "total_tokens": 10, "cost_usd": 0.0, "input_rate": 0.5, "output_rate": 3.0}
+            return "He stood on the hill, gazing afar.", {"model": "gemini-3.5-flash", "prompt_tokens": 5,
+                                                         "candidates_tokens": 3, "total_tokens": 8,
+                                                         "cost_usd": 0.0, "input_rate": 0.5, "output_rate": 3.0}
+        with patch("services.lt_segment_retranslate._resolve_file_search_store", return_value=None), \
+             patch("services.lt_segment_retranslate._sync_support_files"), \
+             patch("services.lt_segment_retranslate._call_gemini", side_effect=fake_gemini):
+            result = retranslate_segment("order-1", 1, "zh-tw", "en")
+        assert result.translated == "He stood on the hill, gazing afar."
+        assert len(result.gemini_usage) == 2
 
     @patch("core.storage.write_temp_json")
     @patch("core.storage.read_temp_json")
@@ -220,14 +265,21 @@ class TestCallGemini:
         import core.config
         return patch.object(core.config, "settings", SimpleNamespace(gemini_api_key="test-key"))
 
+    @staticmethod
+    def _resp(text=None, finish_reason="FinishReason.STOP", block_reason=None, usage=None):
+        from types import SimpleNamespace
+        resp = MagicMock()
+        resp.candidates = [SimpleNamespace(finish_reason=finish_reason)]
+        resp.text = text
+        resp.prompt_feedback = SimpleNamespace(block_reason=block_reason)
+        resp.usage_metadata = usage
+        return resp
+
     def test_prohibited_content_raises(self):
         from services.lt_segment_retranslate import _call_gemini, SegmentContentBlocked
         mock_client = MagicMock()
-        resp = MagicMock()
-        resp.candidates = [MagicMock(finish_reason="FinishReason.PROHIBITED_CONTENT")]
-        resp.text = None
-        resp.prompt_feedback = MagicMock(block_reason=None)
-        mock_client.models.generate_content.return_value = resp
+        mock_client.models.generate_content.return_value = self._resp(
+            text=None, finish_reason="FinishReason.PROHIBITED_CONTENT")
         with self._patch_settings(), patch("google.genai.Client", return_value=mock_client):
             with pytest.raises(SegmentContentBlocked):
                 _call_gemini("some prompt")
@@ -235,26 +287,22 @@ class TestCallGemini:
     def test_empty_without_block_returns_empty(self):
         from services.lt_segment_retranslate import _call_gemini
         mock_client = MagicMock()
-        resp = MagicMock()
-        resp.candidates = [MagicMock(finish_reason="FinishReason.MAX_TOKENS")]
-        resp.text = None
-        resp.prompt_feedback = MagicMock(block_reason=None)
-        mock_client.models.generate_content.return_value = resp
+        mock_client.models.generate_content.return_value = self._resp(
+            text=None, finish_reason="FinishReason.MAX_TOKENS")
         with self._patch_settings(), patch("google.genai.Client", return_value=mock_client):
-            assert _call_gemini("some prompt") == ""
+            text, usage = _call_gemini("some prompt")
+        assert text == ""
+        assert usage is None
 
     def test_store_name_attaches_file_search_tool(self):
         from services.lt_segment_retranslate import _call_gemini, _file_search_tool
         if _file_search_tool is None:
             pytest.skip("ots_common File Search helpers unavailable in this environment")
         mock_client = MagicMock()
-        resp = MagicMock()
-        resp.candidates = [MagicMock(finish_reason="FinishReason.STOP")]
-        resp.text = "hello"
-        resp.prompt_feedback = MagicMock(block_reason=None)
-        mock_client.models.generate_content.return_value = resp
+        mock_client.models.generate_content.return_value = self._resp(text="hello")
         with self._patch_settings(), patch("google.genai.Client", return_value=mock_client):
-            assert _call_gemini("some prompt", store_name="stores/order-1") == "hello"
+            text, usage = _call_gemini("some prompt", store_name="stores/order-1")
+        assert text == "hello"
         config = mock_client.models.generate_content.call_args.kwargs["config"]
         assert config.tools and config.tools[0].file_search
         assert config.tools[0].file_search.file_search_store_names == ["stores/order-1"]
@@ -262,15 +310,66 @@ class TestCallGemini:
     def test_no_store_no_tool(self):
         from services.lt_segment_retranslate import _call_gemini
         mock_client = MagicMock()
-        resp = MagicMock()
-        resp.candidates = [MagicMock(finish_reason="FinishReason.STOP")]
-        resp.text = "hello"
-        resp.prompt_feedback = MagicMock(block_reason=None)
-        mock_client.models.generate_content.return_value = resp
+        mock_client.models.generate_content.return_value = self._resp(text="hello")
         with self._patch_settings(), patch("google.genai.Client", return_value=mock_client):
-            assert _call_gemini("some prompt") == "hello"
+            text, usage = _call_gemini("some prompt")
+        assert text == "hello"
         config = mock_client.models.generate_content.call_args.kwargs["config"]
         assert not config.tools
+
+    def test_returns_usage_record_with_cost(self):
+        from services.lt_segment_retranslate import _call_gemini
+        from types import SimpleNamespace
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = self._resp(
+            text="hello",
+            usage=SimpleNamespace(prompt_token_count=100000, candidates_token_count=2000, total_token_count=102000),
+        )
+        with self._patch_settings(), patch("google.genai.Client", return_value=mock_client):
+            text, usage = _call_gemini("some prompt")
+        assert text == "hello"
+        # gemini-3.5-flash: 0.50 / 3.00 per 1M tokens
+        assert usage["model"] == "gemini-3.5-flash"
+        assert usage["prompt_tokens"] == 100000
+        assert usage["candidates_tokens"] == 2000
+        assert usage["total_tokens"] == 102000
+        assert usage["input_rate"] == 0.50
+        assert usage["output_rate"] == 3.00
+        assert usage["cost_usd"] == pytest.approx(0.05 + 0.006, rel=1e-6)
+
+    def test_usage_present_on_blocked_but_zero_output(self):
+        from services.lt_segment_retranslate import _call_gemini
+        from types import SimpleNamespace
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = self._resp(
+            text=None,
+            finish_reason="FinishReason.MAX_TOKENS",
+            usage=SimpleNamespace(prompt_token_count=500, candidates_token_count=0, total_token_count=500),
+        )
+        with self._patch_settings(), patch("google.genai.Client", return_value=mock_client):
+            text, usage = _call_gemini("some prompt")
+        assert text == ""
+        assert usage["prompt_tokens"] == 500
+        assert usage["candidates_tokens"] == 0
+
+
+class TestTokenUsageRecord:
+    def test_none_usage_returns_none(self):
+        from services.lt_segment_retranslate import _token_usage_record
+        assert _token_usage_record("gemini-3.5-flash", None) is None
+
+    def test_zero_usage_returns_none(self):
+        from types import SimpleNamespace
+        from services.lt_segment_retranslate import _token_usage_record
+        usage = SimpleNamespace(prompt_token_count=0, candidates_token_count=0, total_token_count=0)
+        assert _token_usage_record("gemini-3.5-flash", usage) is None
+
+    def test_missing_total_falls_back_to_sum(self):
+        from types import SimpleNamespace
+        from services.lt_segment_retranslate import _token_usage_record
+        usage = SimpleNamespace(prompt_token_count=10, candidates_token_count=20, total_token_count=0)
+        rec = _token_usage_record("gemini-3.5-flash", usage)
+        assert rec["total_tokens"] == 30
 
 
 class TestFileSearchStore:

@@ -673,7 +673,33 @@ async def retranslate_lt_segment(
             RETURNING qf.id
         """), {"order_id": order_id, "index": index})
         flags_resolved = len(resolved.fetchall())
-        await db.commit()
+
+    # 5. Record Gemini token usage for this retranslate (non-fatal — a usage
+    #    insert failure must never fail an already-successful retranslation).
+    for u in result.gemini_usage:
+        try:
+            await db.execute(text("""
+                INSERT INTO token_usage
+                    (order_id, job_type, model, prompt_tokens, candidates_tokens,
+                     total_tokens, cost_usd, input_rate, output_rate)
+                VALUES
+                    (:order_id, :job_type, :model, :prompt_tokens, :candidates_tokens,
+                     :total_tokens, :cost_usd, :input_rate, :output_rate)
+            """), {
+                "order_id":          order_id,
+                "job_type":          "lt_retranslate",
+                "model":             u.get("model"),
+                "prompt_tokens":     u.get("prompt_tokens", 0),
+                "candidates_tokens": u.get("candidates_tokens", 0),
+                "total_tokens":      u.get("total_tokens", 0),
+                "cost_usd":          u.get("cost_usd", 0),
+                "input_rate":        u.get("input_rate", 0),
+                "output_rate":       u.get("output_rate", 0),
+            })
+        except Exception as e:
+            logger.warning(f"token_usage insert failed (non-fatal): {e}")
+
+    await db.commit()
 
     logger.info(f"Retranslate segment {index + 1} for order {order_id}: flags_resolved={flags_resolved}")
     return SegmentRetranslateResponse(

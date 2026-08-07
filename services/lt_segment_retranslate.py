@@ -8,10 +8,11 @@ pattern, same as ots-common).
 """
 
 import logging
+import os
 import re
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -49,6 +50,14 @@ logger = logging.getLogger(__name__)
 
 MODEL_NAME = "gemini-3.5-flash"
 MAX_OUTPUT_TOKENS = 16384
+# Unit rates (USD per 1M tokens) used to compute token_usage.cost_usd.
+# Mirrors ots-pipeline/shared/config.py MODEL_PRICING for gemini-3.5-flash.
+MODEL_PRICING = {
+    "gemini-3.5-flash": {
+        "input":  float(os.environ.get("GEMINI_35_FLASH_INPUT_COST", "0.50")),
+        "output": float(os.environ.get("GEMINI_35_FLASH_OUTPUT_COST", "3.00")),
+    },
+}
 # Open-weight fallback model for content-policy-blocked segments. Replicate's
 # hosted Llama 3 70B translates literary content Gemini refuses (verified on
 # the PE-teacher scene that hard-blocks gemini-3.5-flash).
@@ -130,6 +139,12 @@ class SegmentContentBlocked(SegmentRetranslateError):
 class RetranslateResult:
     translated: str
     used_fallback: bool = False
+    # Token usage records from every real Gemini call (prompt + no-context
+    # retry). Each entry mirrors the token_usage table row minus order_id and
+    # job_type: {model, prompt_tokens, candidates_tokens, total_tokens,
+    # cost_usd, input_rate, output_rate}. Empty when translate_func was
+    # injected (tests) — usage can only be captured from the real client.
+    gemini_usage: list = field(default_factory=list)
 
 
 def _get_hanzi_instruction(target_lang: str) -> str:
@@ -334,15 +349,49 @@ def _sync_support_files(order_id: str, store_name: str) -> None:
         logger.warning(f"Support file sync to File Search failed (non-fatal): {e}")
 
 
-def _call_gemini(prompt: str, store_name: Optional[str] = None) -> str:
+def _token_usage_record(model: str, usage) -> Optional[dict]:
+    """Build a token_usage row dict from a Gemini usage_metadata, or None.
+
+    ``usage`` is a ``google.genai`` ``GenerateContentResponseUsageMetadata``
+    (attributes ``prompt_token_count`` / ``candidates_token_count`` /
+    ``total_token_count``). Cost is computed from ``MODEL_PRICING``; the unit
+    rates are stored alongside for transparent cost display (matches the
+    pipeline's ``log_token_usage``).
+    """
+    if not usage:
+        return None
+    prompt_tokens     = int(getattr(usage, "prompt_token_count", 0) or 0)
+    candidates_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
+    total_tokens      = int(getattr(usage, "total_token_count", 0) or 0) or (prompt_tokens + candidates_tokens)
+    if not prompt_tokens and not candidates_tokens:
+        return None
+    rate = MODEL_PRICING.get(model, {"input": 0, "output": 0})
+    input_rate  = float(rate["input"])
+    output_rate = float(rate["output"])
+    cost_usd = (prompt_tokens / 1_000_000 * input_rate) + \
+               (candidates_tokens / 1_000_000 * output_rate)
+    return {
+        "model":             model,
+        "prompt_tokens":     prompt_tokens,
+        "candidates_tokens": candidates_tokens,
+        "total_tokens":      total_tokens,
+        "cost_usd":          round(cost_usd, 6),
+        "input_rate":        input_rate,
+        "output_rate":       output_rate,
+    }
+
+
+def _call_gemini(prompt: str, store_name: Optional[str] = None) -> tuple[str, Optional[dict]]:
     """Default Gemini client wrapper (injectable for tests).
 
-    When ``store_name`` is given (a per-order Gemini File Search store), the
-    call is made with a ``FileSearch`` tool so Gemini can retrieve from the
-    order's raw support files (glossaries, name tables, style guides). The
-    reference context is retrieved by the model rather than inlined into the
-    prompt, which avoids the prompt-size/content-policy problems of inline
-    inlining and keeps arbitrary publisher file formats working.
+    Returns ``(text, usage_record)`` where ``usage_record`` is the token_usage
+    row dict (or None when the model reports no usage). When ``store_name`` is
+    given (a per-order Gemini File Search store), the call is made with a
+    ``FileSearch`` tool so Gemini can retrieve from the order's raw support
+    files (glossaries, name tables, style guides). The reference context is
+    retrieved by the model rather than inlined into the prompt, which avoids
+    the prompt-size/content-policy problems of inline inlining and keeps
+    arbitrary publisher file formats working.
     """
     from google.genai import types
 
@@ -368,6 +417,7 @@ def _call_gemini(prompt: str, store_name: Optional[str] = None) -> str:
         contents=prompt,
         config=types.GenerateContentConfig(**config_kwargs),
     )
+    usage = _token_usage_record(MODEL_NAME, getattr(response, "usage_metadata", None))
     if not getattr(response, "candidates", None) or not getattr(response, "text", None):
         fb = getattr(response, "prompt_feedback", None)
         reason = getattr(fb, "block_reason", None)
@@ -381,8 +431,8 @@ def _call_gemini(prompt: str, store_name: Optional[str] = None) -> str:
             raise SegmentContentBlocked(
                 "Gemini refused to translate this segment on content-policy grounds"
             )
-        return ""
-    return response.text.strip()
+        return "", usage
+    return response.text.strip(), usage
 
 
 def _call_replicate(prompt: str) -> str:
@@ -503,10 +553,15 @@ def retranslate_segment(
         prompt += REFERENCE_FILES_INSTRUCTION
         no_context_prompt += REFERENCE_FILES_INSTRUCTION
 
+    gemini_usage: list = []
+
     def _caller(p: str) -> str:
         if translate_func is not None:
             return translate_func(p)
-        return _call_gemini(p, store_name=store_name)
+        text, usage = _call_gemini(p, store_name=store_name)
+        if usage:
+            gemini_usage.append(usage)
+        return text
 
     caller = _caller
     fallback_caller = fallback_translate_func or _call_replicate
@@ -565,4 +620,8 @@ def retranslate_segment(
         storage.write_temp_json(order_id, "translations_raw.json", list(raw_map.values()))
 
     logger.info(f"Retranslated segment {index + 1} for order {order_id}: {len(source_text)} → {len(new_text)} chars (fallback={used_fallback})")
-    return RetranslateResult(translated=new_text, used_fallback=used_fallback)
+    return RetranslateResult(
+        translated=new_text,
+        used_fallback=used_fallback,
+        gemini_usage=gemini_usage,
+    )

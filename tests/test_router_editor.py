@@ -751,6 +751,43 @@ class TestRetranslateLtSegment:
         assert resp.status_code == 200
         assert resp.json()["used_fallback"] is True
 
+    @patch("services.lt_segment_retranslate.retranslate_segment",
+           return_value=RetranslateResult(translated="He stood on the hill.", gemini_usage=[
+               {"model": "gemini-3.5-flash", "prompt_tokens": 1000, "candidates_tokens": 500,
+                "total_tokens": 1500, "cost_usd": 0.002, "input_rate": 0.50, "output_rate": 3.00},
+           ]))
+    def test_token_usage_recorded(self, mock_svc, mock_db):
+        inserted = []
+        def handler(query, *args, **kwargs):
+            from types import SimpleNamespace
+            q = str(query)
+            if "source_lang" in q:
+                row = SimpleNamespace(source_lang="zh-tw", target_lang="en")
+                res = MagicMock()
+                res.fetchone.return_value = row
+                return res
+            if "INSERT INTO token_usage" in q:
+                inserted.append(args[0] if args else kwargs.get("params"))
+                return MagicMock()
+            if "UPDATE qa_flags" in q:
+                res = MagicMock()
+                res.fetchall.return_value = [1, 2]
+                return res
+            res = MagicMock()
+            res.fetchone.return_value = MagicMock()
+            return res
+        mock_db.execute.side_effect = handler
+        client = _make_lt_app(mock_db)
+        resp = client.post("/editor/lt/orders/order-001/segments/1/retranslate?role=editor")
+        assert resp.status_code == 200
+        assert len(inserted) == 1
+        params = inserted[0]
+        assert params["order_id"] == "order-001"
+        assert params["job_type"] == "lt_retranslate"
+        assert params["model"] == "gemini-3.5-flash"
+        assert params["prompt_tokens"] == 1000
+        assert params["cost_usd"] == pytest.approx(0.002)
+
     def test_access_denied(self, mock_db):
         mock_db.execute.return_value.fetchone.return_value = None
         client = _make_lt_app(mock_db)
