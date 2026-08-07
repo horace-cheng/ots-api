@@ -996,7 +996,8 @@ class TestUpdateLtSegmentSource:
         assert resp.status_code == 404
         mock_write.assert_not_called()
 
-    def test_empty_source_rejected(self, mock_db):
+    def test_empty_source_allowed(self, mock_db):
+        """Empty source is allowed so editors can merge segments (clearing one)."""
         mock_db.execute.return_value = self._reads()
         with patch("core.storage.read_temp_json", side_effect=[
             list(self.SEGMENTS), list(self.TRANSLATIONS), dict(self.OVERRIDES),
@@ -1005,10 +1006,18 @@ class TestUpdateLtSegmentSource:
             client = _make_lt_app(mock_db)
             resp = client.patch(
                 "/editor/lt/orders/order-001/segments/0/source?role=editor",
-                json={"source": "   "},
+                json={"source": ""},
             )
-        assert resp.status_code == 400
-        mock_write.assert_not_called()
+        assert resp.status_code == 200
+        assert resp.json() == {"index": 0, "source": "", "source_edited": True}
+        written_segments = mock_write.call_args_list[0].args[2]
+        written_trans = mock_write.call_args_list[1].args[2]
+        written_overrides = mock_write.call_args_list[2].args[2]
+        assert written_segments[0]["text"] == ""
+        assert written_trans[0]["source"] == ""
+        assert written_trans[0]["source_edited"] is True
+        assert written_overrides["0"]["original"] == "Old source"
+        assert written_overrides["0"]["edited"] == ""
 
     def test_missing_translation_entry(self, mock_db):
         mock_db.execute.return_value = self._reads()

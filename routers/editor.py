@@ -747,8 +747,6 @@ async def update_lt_segment_source(
         raise HTTPException(status_code=403, detail="Only editors can edit source segments")
 
     new_source = body.source.strip()
-    if not new_source:
-        raise HTTPException(status_code=400, detail="Source cannot be empty")
 
     segments = storage.read_temp_json(order_id, "segments.json")
     translations = storage.read_temp_json(order_id, "translations.json")
