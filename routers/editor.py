@@ -12,6 +12,7 @@ from sqlalchemy import text
 import json
 import logging
 from datetime import datetime, timezone
+from typing import List
 
 from core.database import get_db
 from core import storage
@@ -25,7 +26,7 @@ from services.translation_versions import (
 )
 from models.schemas import (
     OrderDetail, OrderListResponse,
-    QASegment, QASegmentListResponse, QASegmentsBatchUpdate,
+    QASegment, QASegmentListResponse, QASegmentsBatchUpdate, ChapterItem,
     SegmentRetranslateResponse, SourceUpdateRequest, SegmentSourceResponse,
     MessageResponse, QAFlagResponse, EditorAssignRequest,
     UserListResponse, UserListItem,
@@ -40,6 +41,51 @@ from services.gemini import generate_synopsis, generate_book_fact_sheet, generat
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/editor", tags=["editor"])
+
+
+def build_chapters(segments: List[QASegment]) -> List[ChapterItem]:
+    """Derive chapters from per-segment `is_chapter_title` marks.
+
+    Segments must be in index order. Each marked segment starts a titled
+    chapter; segments before the first mark form one untitled chapter.
+    The result always contains at least one chapter.
+    """
+    chapters: List[ChapterItem] = []
+    current: ChapterItem | None = None
+    for seg in segments:
+        if seg.is_chapter_title:
+            if current is not None:
+                current.end_index = seg.index - 1
+                current.segment_count = current.end_index - current.start_index + 1
+            current = ChapterItem(
+                chapter_index=len(chapters),
+                start_index=seg.index,
+                end_index=seg.index,
+                segment_count=1,
+                title_segment_index=seg.index,
+                title_source=seg.source,
+                title_translated=seg.translated,
+            )
+            chapters.append(current)
+        elif current is None:
+            current = ChapterItem(
+                chapter_index=len(chapters),
+                start_index=seg.index,
+                end_index=seg.index,
+                segment_count=1,
+            )
+            chapters.append(current)
+        else:
+            current.end_index = seg.index
+            current.segment_count = current.end_index - current.start_index + 1
+    if not chapters and segments:
+        chapters.append(ChapterItem(
+            chapter_index=0,
+            start_index=segments[0].index,
+            end_index=segments[-1].index,
+            segment_count=len(segments),
+        ))
+    return chapters
 
 
 @router.get("/orders", response_model=OrderListResponse)
@@ -457,7 +503,7 @@ async def get_lt_order(
 @router.get("/lt/orders/{order_id}/segments", response_model=QASegmentListResponse)
 async def get_lt_order_segments(
     order_id: str,
-    limit:  int        = Query(50, ge=1, le=200),
+    limit:  int        = Query(50, ge=1, le=1000),
     offset: int        = Query(0, ge=0),
     q:        str        = Query("", description="Search keyword across source, translated, and comments"),
     search_all: bool    = Query(False, description="If true, search across all segments before paginating"),
@@ -520,9 +566,11 @@ async def get_lt_order_segments(
             editor_comments = t.get("editor_comments"),
             proofreader_comments = t.get("proofreader_comments"),
             source_edited = bool(t.get("source_edited", False)),
+            is_chapter_title = bool(t.get("is_chapter_title", False)),
             flags      = flags_map.get(idx, []),
         ))
 
+    chapters = build_chapters(res_segments)
     total = len(res_segments)
 
     if search_all and q:
@@ -560,6 +608,7 @@ async def get_lt_order_segments(
         total_must_fix=len(must_fix_indices),
         must_fix_indices=must_fix_indices,
         all_flags=all_flags,
+        chapters=chapters,
     )
 
 
@@ -591,6 +640,9 @@ async def update_lt_order_segments(
     if not translations:
         raise HTTPException(status_code=404, detail="Translations not found")
 
+    if role == "proofreader" and any(up.is_chapter_title is not None for up in body.segments):
+        raise HTTPException(status_code=403, detail="Only editors can set chapter titles")
+
     trans_map = {t["index"]: t for t in translations}
     for up in body.segments:
         if up.index in trans_map:
@@ -605,6 +657,8 @@ async def update_lt_order_segments(
                 trans_map[up.index]["editor_comments"] = up.editor_comments
             if up.proofreader_comments is not None:
                 trans_map[up.index]["proofreader_comments"] = up.proofreader_comments
+            if up.is_chapter_title is not None:
+                trans_map[up.index]["is_chapter_title"] = up.is_chapter_title
 
     storage.write_temp_json(order_id, "translations.json", list(trans_map.values()))
     return MessageResponse(message="Segments updated")

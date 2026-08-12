@@ -294,7 +294,17 @@ class QASegment(BaseModel):
     editor_comments: Optional[str] = None
     proofreader_comments: Optional[str] = None
     source_edited:  Optional[bool] = False
+    is_chapter_title: Optional[bool] = False
     flags:          List[QAFlagResponse] = []
+
+class ChapterItem(BaseModel):
+    chapter_index:       int
+    start_index:         int
+    end_index:           int
+    segment_count:       int
+    title_segment_index: Optional[int] = None
+    title_source:        Optional[str] = None
+    title_translated:    Optional[str] = None
 
 class QASegmentListResponse(BaseModel):
     segments:        List[QASegment]
@@ -302,6 +312,7 @@ class QASegmentListResponse(BaseModel):
     total_must_fix:  int = 0
     must_fix_indices: List[int] = []
     all_flags:       List[QAFlagResponse] = []
+    chapters:        List[ChapterItem] = []
 
 class QASegmentUpdate(BaseModel):
     index:      int
@@ -309,6 +320,7 @@ class QASegmentUpdate(BaseModel):
     comments:   Optional[str] = None
     editor_comments: Optional[str] = None
     proofreader_comments: Optional[str] = None
+    is_chapter_title: Optional[bool] = None
 
 class QASegmentsBatchUpdate(BaseModel):
     segments: List[QASegmentUpdate]

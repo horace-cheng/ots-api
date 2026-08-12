@@ -1068,3 +1068,161 @@ class TestUpdateLtSegmentsClearsSourceEdited:
         written = mock_write.call_args.args[2]
         assert written[0]["translated"] == "new"
         assert written[0]["source_edited"] is False
+
+
+class TestGetLtSegmentsChapters:
+    """GET /editor/lt/orders/{order_id}/segments derives chapters from marks."""
+
+    SEGMENTS = [{"index": i, "text": f"S{i}"} for i in range(10)]
+    TRANSLATIONS = [
+        {"index": i, "translated": f"T{i}"}
+        for i in range(10)
+    ]
+
+    @staticmethod
+    def _client(mock_db):
+        mock_db.execute.return_value.fetchone.return_value = MagicMock()
+        mock_db.execute.return_value.fetchall.return_value = []
+        return _make_lt_app(mock_db)
+
+    @staticmethod
+    def _translations_with_marks(*marked_indices):
+        return [
+            dict(t, is_chapter_title=(i in marked_indices))
+            for i, t in enumerate(TestGetLtSegmentsChapters.TRANSLATIONS)
+        ]
+
+    def test_chapters_derived_from_marks(self, mock_db):
+        translations = self._translations_with_marks(3, 7)
+        with patch("core.storage.read_temp_json", side_effect=[
+            list(self.SEGMENTS), translations, None,
+        ]):
+            resp = self._client(mock_db).get(
+                "/editor/lt/orders/order-001/segments?role=editor&limit=1000")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        chapters = data["chapters"]
+        assert len(chapters) == 3
+
+        # Leading untitled group: seg#1-2 (indices 0..2)
+        assert chapters[0]["chapter_index"] == 0
+        assert chapters[0]["start_index"] == 0
+        assert chapters[0]["end_index"] == 2
+        assert chapters[0]["segment_count"] == 3
+        assert chapters[0]["title_segment_index"] is None
+
+        # Title marked at index 3 → chapter seg#4-7 (indices 3..6)
+        assert chapters[1]["chapter_index"] == 1
+        assert chapters[1]["start_index"] == 3
+        assert chapters[1]["end_index"] == 6
+        assert chapters[1]["segment_count"] == 4
+        assert chapters[1]["title_segment_index"] == 3
+        assert chapters[1]["title_source"] == "S3"
+        assert chapters[1]["title_translated"] == "T3"
+
+        # Title marked at index 7 → chapter seg#8-10 (indices 7..9)
+        assert chapters[2]["chapter_index"] == 2
+        assert chapters[2]["start_index"] == 7
+        assert chapters[2]["end_index"] == 9
+        assert chapters[2]["segment_count"] == 3
+        assert chapters[2]["title_segment_index"] == 7
+
+        # is_chapter_title echoed per segment
+        segs = {s["index"]: s for s in data["segments"]}
+        assert segs[3]["is_chapter_title"] is True
+        assert segs[7]["is_chapter_title"] is True
+        assert segs[0]["is_chapter_title"] is False
+
+    def test_no_marks_single_untitled_chapter(self, mock_db):
+        with patch("core.storage.read_temp_json", side_effect=[
+            list(self.SEGMENTS), list(self.TRANSLATIONS), None,
+        ]):
+            resp = self._client(mock_db).get(
+                "/editor/lt/orders/order-001/segments?role=editor")
+
+        assert resp.status_code == 200
+        chapters = resp.json()["chapters"]
+        assert len(chapters) == 1
+        assert chapters[0]["start_index"] == 0
+        assert chapters[0]["end_index"] == 9
+        assert chapters[0]["segment_count"] == 10
+        assert chapters[0]["title_segment_index"] is None
+
+    def test_limit_1000_accepted(self, mock_db):
+        with patch("core.storage.read_temp_json", side_effect=[
+            list(self.SEGMENTS), list(self.TRANSLATIONS), None,
+        ]):
+            resp = self._client(mock_db).get(
+                "/editor/lt/orders/order-001/segments?role=editor&limit=1000")
+
+        assert resp.status_code == 200
+        assert len(resp.json()["segments"]) == 10
+
+    def test_limit_over_1000_rejected(self, mock_db):
+        with patch("core.storage.read_temp_json", side_effect=[
+            list(self.SEGMENTS), list(self.TRANSLATIONS), None,
+        ]):
+            resp = self._client(mock_db).get(
+                "/editor/lt/orders/order-001/segments?role=editor&limit=1001")
+
+        assert resp.status_code == 422
+
+
+class TestUpdateLtSegmentsChapterMark:
+    """PATCH /editor/lt/orders/{order_id}/segments persists chapter-title marks."""
+
+    @patch("core.storage.write_temp_json")
+    @patch("core.storage.read_temp_json")
+    def test_editor_persists_chapter_title(self, mock_read, mock_write, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = MagicMock()
+        mock_read.return_value = [{"index": 1, "translated": "old"}]
+        client = _make_lt_app(mock_db)
+        resp = client.patch(
+            "/editor/lt/orders/order-001/segments?role=editor",
+            json={"segments": [{"index": 1, "translated": "old", "is_chapter_title": True}]},
+        )
+        assert resp.status_code == 200
+        written = mock_write.call_args.args[2]
+        assert written[0]["is_chapter_title"] is True
+
+    @patch("core.storage.write_temp_json")
+    @patch("core.storage.read_temp_json")
+    def test_editor_unmarks_chapter_title(self, mock_read, mock_write, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = MagicMock()
+        mock_read.return_value = [{"index": 1, "translated": "old", "is_chapter_title": True}]
+        client = _make_lt_app(mock_db)
+        resp = client.patch(
+            "/editor/lt/orders/order-001/segments?role=editor",
+            json={"segments": [{"index": 1, "translated": "old", "is_chapter_title": False}]},
+        )
+        assert resp.status_code == 200
+        written = mock_write.call_args.args[2]
+        assert written[0]["is_chapter_title"] is False
+
+    @patch("core.storage.write_temp_json")
+    @patch("core.storage.read_temp_json")
+    def test_proofreader_cannot_set_chapter_title(self, mock_read, mock_write, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = MagicMock()
+        mock_read.return_value = [{"index": 1, "translated": "old"}]
+        client = _make_lt_app(mock_db)
+        resp = client.patch(
+            "/editor/lt/orders/order-001/segments?role=proofreader",
+            json={"segments": [{"index": 1, "translated": "old", "is_chapter_title": True}]},
+        )
+        assert resp.status_code == 403
+        mock_write.assert_not_called()
+
+    @patch("core.storage.write_temp_json")
+    @patch("core.storage.read_temp_json")
+    def test_proofreader_without_flag_still_allowed(self, mock_read, mock_write, mock_db):
+        mock_db.execute.return_value.fetchone.return_value = MagicMock()
+        mock_read.return_value = [{"index": 1, "translated": "old"}]
+        client = _make_lt_app(mock_db)
+        resp = client.patch(
+            "/editor/lt/orders/order-001/segments?role=proofreader",
+            json={"segments": [{"index": 1, "translated": "new"}]},
+        )
+        assert resp.status_code == 200
+        written = mock_write.call_args.args[2]
+        assert "is_chapter_title" not in written[0]
