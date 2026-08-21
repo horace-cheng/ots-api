@@ -10,7 +10,7 @@ from sqlalchemy import text
 import logging
 
 from core.database import get_db
-from routers.auth import get_current_user, get_admin_user, get_editor_user
+from routers.auth import get_current_user
 from models.schemas import (
     UserProfileResponse, UserProfileUpdate, InvitationCreate, InvitationResponse,
     InvitationAccept, MessageResponse

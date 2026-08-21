@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from .base import (
     PaymentGateway, PaymentRequest, PaymentResult,
     WebhookPayload, InvoiceRequest, InvoiceResult,
-    PaymentStatus, PaymentError, InvoiceError
+    PaymentError, InvoiceError
 )
 from core.config import settings
 

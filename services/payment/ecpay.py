@@ -14,7 +14,7 @@ Sandbox 測試憑證（綠界官方提供）：
 
 import hashlib
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime
 from .base import (
     PaymentGateway, PaymentRequest, PaymentResult,
     WebhookPayload, InvoiceRequest, InvoiceResult,

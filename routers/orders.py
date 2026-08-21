@@ -16,7 +16,7 @@ from core.database import get_db
 from core.config import settings
 from routers.auth import get_current_user
 from models.schemas import (
-    OrderCreate, OrderUpdate, OrderResponse, OrderDetail, OrderListResponse, MessageResponse, QuoteUpdate,
+    OrderCreate, OrderUpdate, OrderResponse, OrderDetail, OrderListResponse, MessageResponse,
     SamplePackageGenerateResponse,
 )
 from services.payment import get_payment_gateway, PaymentRequest, PaymentMethod

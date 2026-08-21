@@ -7,10 +7,9 @@ API 文件：https://www.payuni.com.tw/docs/web/
 """
 
 import hashlib
-import hmac
 import json
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime
 from .base import (
     PaymentGateway, PaymentRequest, PaymentResult,
     WebhookPayload, InvoiceRequest, InvoiceResult,

@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import logging
-import re
 
 from core.database import get_db
 from core.storage import generate_upload_signed_url, generate_download_signed_url, get_storage_client, _get_signing_credentials
@@ -22,17 +21,6 @@ from models.schemas import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/files", tags=["files"])
-
-_LANG_ZH = {
-    "tai-lo":     "台語",
-    "hakka":      "客語",
-    "indigenous": "原住民族語",
-    "zh-tw":      "繁體中文",
-    "en":         "English",
-    "ja":         "日本語",
-    "ko":         "한국어",
-}
-
 
 LANG_ZH = {
     "tai-lo":     "台語",

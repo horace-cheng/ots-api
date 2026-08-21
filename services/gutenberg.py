@@ -506,14 +506,3 @@ async def preview_book(book_id: int) -> dict:
         "num_chapters": len(chapters),
         "num_chunks":   len(chapters),
     }
-
-
-async def fetch_metadata(book_id: int) -> dict:
-    """Fetch book metadata only (title, authors, language)."""
-    book = await fetch_book(book_id)
-    return {
-        "book_id":  book_id,
-        "title":    book["title"],
-        "authors":  book["authors"],
-        "language": book["language"],
-    }

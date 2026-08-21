@@ -19,22 +19,6 @@ class TrackType(str, Enum):
     FAST     = "fast"
     LITERARY = "literary"
 
-class OrderStatus(str, Enum):
-    PENDING_PAYMENT = "pending_payment"
-    AWAITING_QUOTE  = "awaiting_quote"
-    QUOTED          = "quoted"
-    PAID            = "paid"
-    PROCESSING      = "processing"
-    QA_REVIEW       = "qa_review"
-    EDITOR_VERIFY   = "editor_verify"
-    DELIVERED       = "delivered"
-    CANCELLED       = "cancelled"
-
-class FlagLevel(str, Enum):
-    MUST_FIX = "must_fix"
-    REVIEW   = "review"
-    PASS     = "pass"
-
 class ClientType(str, Enum):
     B2C = "b2c"
     B2B = "b2b"
@@ -164,32 +148,6 @@ class OriginalContentResponse(BaseModel):
     filename: str
     content_type: str
     html: str
-
-
-# ── Pipeline Job ──────────────────────────────────────────────────────────────
-class QAResultLayer(BaseModel):
-    pass_: bool = Field(..., alias="pass")
-    flags: int  = 0
-    score: Optional[float] = None
-
-    class Config:
-        populate_by_name = True
-
-class QAResult(BaseModel):
-    layer1_structure:   Optional[QAResultLayer] = None
-    layer2_semantic:    Optional[QAResultLayer] = None
-    layer3_terminology: Optional[QAResultLayer] = None
-    layer4_llm_judge:   Optional[QAResultLayer] = None
-
-class PipelineJobResponse(BaseModel):
-    id:              UUIDStr
-    job_type:        str
-    status:          str
-    qa_result:       Optional[dict]
-    retry_count:     int
-    error_message:   Optional[str]
-    started_at:      Optional[datetime]
-    finished_at:     Optional[datetime]
 
 
 # ── QA Flag ───────────────────────────────────────────────────────────────────
@@ -349,16 +307,6 @@ class EditorAssignRequest(BaseModel):
 
 
 # ── Sample Translation Package ────────────────────────────────────────────────
-class BookFactSheet(BaseModel):
-    title:      Optional[str] = None
-    author:     Optional[str] = None
-    publisher:  Optional[str] = None
-    pub_date:   Optional[str] = None
-    word_count: Optional[str] = None
-    category:   Optional[str] = None
-    sales:      Optional[str] = None
-
-
 class SamplePackageResponse(BaseModel):
     id:              UUIDStr
     order_id:        UUIDStr
@@ -425,9 +373,6 @@ class InvitationAccept(BaseModel):
 # ── 共用回傳 ──────────────────────────────────────────────────────────────────
 class MessageResponse(BaseModel):
     message: str
-
-class ErrorResponse(BaseModel):
-    detail: str
 
 
 # ── Stage-level rerun ───────────────────────────────────────────────────────

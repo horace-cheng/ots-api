@@ -18,7 +18,6 @@ import google.auth.transport.requests
 import google.oauth2.id_token
 
 from core.database import get_db
-from core.config import settings
 from services.notification import publish_event_sync, EventType
 from services.notification.sender import handle_notify_event
 

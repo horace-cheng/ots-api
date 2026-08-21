@@ -35,3 +35,6 @@ markdown>=3.6
 
 # Video assembly (title card generation)
 Pillow>=10.0.0
+
+# PAYUNi gateway (AES-256-CBC encrypted payload)
+pycryptodome>=3.20.0

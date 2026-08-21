@@ -6,7 +6,7 @@ routers/payments.py
 切換金流廠商只需要改環境變數 PAYMENT_GATEWAY，這個檔案不需要動。
 """
 
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Request, Depends
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -17,7 +17,6 @@ from services.payment import (
     PaymentStatus,
     InvoiceRequest,
     InvoiceType,
-    PaymentError,
     InvoiceError,
 )
 from services.pipeline import trigger_pipeline
